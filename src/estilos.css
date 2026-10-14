@@ -1,0 +1,78 @@
+:root {
+  --fondo: #f5f7fa; --superficie: #ffffff; --texto: #1d2733; --texto-suave: #5b6876;
+  --primario: #1f4e8c; --primario-texto: #ffffff; --borde: #d5dce4;
+  --exito: #1e7b4a; --error: #b3261e; --aviso: #fff4cc; --aviso-texto: #6b5200;
+  --menu-activo: #e3ecf8;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fondo: #12171d; --superficie: #1b222b; --texto: #e6ebf1; --texto-suave: #9aa7b5;
+    --primario: #5b9bf0; --primario-texto: #0b1420; --borde: #2f3a47;
+    --exito: #4cc384; --error: #ff8a80; --aviso: #3d3411; --aviso-texto: #f3dd8a;
+    --menu-activo: #243449;
+  }
+}
+* { box-sizing: border-box; }
+html, body, #raiz { height: 100%; }
+body { margin: 0; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif; background: var(--fondo); color: var(--texto); font-size: 16px; line-height: 1.5; }
+h1 { font-size: 1.6rem; margin: 0 0 .5rem; } h2 { font-size: 1.1rem; margin: 0 0 .35rem; } h3 { margin: 0 0 .35rem; }
+.texto-suave { color: var(--texto-suave); }
+code { background: var(--menu-activo); padding: 1px 6px; border-radius: 4px; }
+
+.aplicacion { min-height: 100%; display: flex; flex-direction: column; }
+.banner-demo { background: var(--aviso); color: var(--aviso-texto); padding: .5rem 1rem; text-align: center; font-size: .9rem; }
+.encabezado { background: var(--superficie); border-bottom: 1px solid var(--borde); padding: .75rem 1.25rem; display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.encabezado__titulo { display: flex; flex-direction: column; }
+.encabezado__titulo span { color: var(--texto-suave); font-size: .85rem; }
+.encabezado__usuario { display: flex; align-items: center; gap: .75rem; }
+.cuerpo { flex: 1; display: flex; min-height: 0; }
+.menu { width: 240px; background: var(--superficie); border-right: 1px solid var(--borde); padding: .75rem; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; }
+.menu__enlace { display: flex; justify-content: space-between; align-items: center; gap: .5rem; padding: .6rem .75rem; border-radius: 8px; color: var(--texto); text-decoration: none; min-height: 44px; }
+.menu__enlace:hover:not(.menu__enlace--deshabilitado) { background: var(--menu-activo); }
+.menu__enlace--activo { background: var(--menu-activo); font-weight: 600; }
+.menu__enlace--deshabilitado { color: var(--texto-suave); cursor: not-allowed; }
+.menu__enlace small { font-size: .7rem; border: 1px solid var(--borde); border-radius: 999px; padding: 0 .5rem; white-space: nowrap; }
+.contenido { flex: 1; padding: 1.5rem; min-width: 0; }
+
+.tarjetas { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 1rem; margin-top: 1.25rem; }
+.tarjeta { background: var(--superficie); border: 1px solid var(--borde); border-radius: 12px; padding: 1rem; }
+.tarjeta p { margin: 0 0 .6rem; color: var(--texto-suave); font-size: .9rem; }
+.tarjeta--deshabilitada { opacity: .75; }
+.etiqueta { display: inline-block; font-size: .75rem; border: 1px solid var(--borde); border-radius: 999px; padding: 2px 10px; color: var(--texto-suave); }
+
+.boton { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: .5rem 1.1rem; border: 1px solid var(--primario); background: var(--primario); color: var(--primario-texto); border-radius: 8px; font: inherit; font-weight: 600; cursor: pointer; text-decoration: none; }
+.boton:disabled { opacity: .6; cursor: not-allowed; }
+.boton--secundario { background: transparent; color: var(--primario); }
+.boton--peligro { background: var(--error); border-color: var(--error); color: #fff; }
+.boton:focus-visible, input:focus-visible, .menu__enlace:focus-visible { outline: 3px solid var(--primario); outline-offset: 2px; }
+
+.pagina-centrada { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .75rem; padding: 1.5rem; text-align: center; }
+.formulario-login { width: 100%; max-width: 380px; background: var(--superficie); border: 1px solid var(--borde); border-radius: 14px; padding: 1.5rem; display: flex; flex-direction: column; gap: .5rem; text-align: left; }
+.formulario-login label { font-weight: 600; margin-top: .4rem; }
+.formulario-login input { min-height: 44px; padding: .5rem .75rem; border: 1px solid var(--borde); border-radius: 8px; font: inherit; background: var(--fondo); color: var(--texto); }
+.formulario-login .boton { margin-top: .75rem; }
+.error-formulario { color: var(--error); margin: .25rem 0 0; font-weight: 600; }
+.ayuda-demo { font-size: .85rem; color: var(--texto-suave); margin: .5rem 0 0; }
+
+.cargando { display: flex; align-items: center; justify-content: center; gap: .6rem; padding: 2rem; color: var(--texto-suave); }
+.cargando__rueda { width: 20px; height: 20px; border: 3px solid var(--borde); border-top-color: var(--primario); border-radius: 50%; animation: giro .8s linear infinite; }
+@keyframes giro { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .cargando__rueda { animation: none; } }
+.estado-vacio { text-align: center; padding: 2rem 1rem; color: var(--texto-suave); border: 1px dashed var(--borde); border-radius: 12px; }
+
+.dialogo-fondo { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; padding: 1rem; z-index: 50; }
+.dialogo { background: var(--superficie); color: var(--texto); border-radius: 14px; padding: 1.25rem; width: 100%; max-width: 440px; }
+.dialogo__acciones { display: flex; justify-content: flex-end; gap: .6rem; margin-top: 1rem; }
+
+.notificaciones { position: fixed; right: 1rem; bottom: 1rem; display: flex; flex-direction: column; gap: .5rem; z-index: 60; max-width: min(380px, calc(100vw - 2rem)); }
+.notificacion { display: flex; justify-content: space-between; gap: .75rem; align-items: flex-start; background: var(--superficie); border: 1px solid var(--borde); border-left-width: 5px; border-radius: 8px; padding: .65rem .85rem; box-shadow: 0 4px 14px rgba(0,0,0,.18); }
+.notificacion--exito { border-left-color: var(--exito); } .notificacion--error { border-left-color: var(--error); } .notificacion--info { border-left-color: var(--primario); }
+.notificacion__cerrar { background: none; border: 0; color: inherit; font-size: 1.2rem; cursor: pointer; line-height: 1; }
+
+@media (max-width: 800px) {
+  .cuerpo { flex-direction: column; }
+  .menu { width: 100%; flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--borde); }
+  .menu__enlace { white-space: nowrap; }
+  .contenido { padding: 1rem; }
+}
