@@ -8,6 +8,7 @@ export const CODIGOS = Object.freeze({
   SIN_PERMISO: 'SIN_PERMISO',
   CONEXION: 'CONEXION',
   OPERACION_DUPLICADA: 'OPERACION_DUPLICADA',
+  NOMBRE_DUPLICADO: 'NOMBRE_DUPLICADO',
   DESCONOCIDO: 'DESCONOCIDO',
 });
 
@@ -19,14 +20,17 @@ export const MENSAJES = Object.freeze({
   SIN_PERMISO: 'No tenés permiso para realizar esta acción.',
   CONEXION: 'No se pudo conectar. Revisá tu conexión e intentá de nuevo.',
   OPERACION_DUPLICADA: 'Esta operación ya había sido registrada.',
+  NOMBRE_DUPLICADO: 'Ya existe un producto con ese nombre.',
   DESCONOCIDO: 'Ocurrió un error inesperado. Intentá de nuevo.',
 });
 
 export class ErrorDatos extends Error {
-  constructor(codigo, detalle) {
+  // `campos` (opcional): mensajes por campo del formulario, p. ej. { nombre: 'El nombre es obligatorio.' }.
+  constructor(codigo, detalle, campos) {
     super(detalle ?? MENSAJES[codigo] ?? MENSAJES.DESCONOCIDO);
     this.name = 'ErrorDatos';
     this.codigo = CODIGOS[codigo] ? codigo : CODIGOS.DESCONOCIDO;
+    this.campos = campos ?? null;
   }
   /** Mensaje seguro para mostrar al usuario final. */
   get mensajeUsuario() {

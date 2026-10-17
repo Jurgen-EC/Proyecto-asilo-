@@ -20,8 +20,8 @@ export function ProveedorAutenticacion({ children, datos = datosPorDefecto }) {
   const cerrarSesion = useCallback(() => datos.autenticacion.cerrarSesion(), [datos]);
 
   const valor = useMemo(
-    () => ({ usuario, cargando, iniciarSesion, cerrarSesion, esDemo: datos.esDemo }),
-    [usuario, cargando, iniciarSesion, cerrarSesion, datos.esDemo],
+    () => ({ usuario, cargando, iniciarSesion, cerrarSesion, esDemo: datos.esDemo, datos }),
+    [usuario, cargando, iniciarSesion, cerrarSesion, datos],
   );
   return <Contexto.Provider value={valor}>{children}</Contexto.Provider>;
 }
