@@ -11,15 +11,19 @@ Las firmas son lo que debe respetar cualquier adaptador; los nombres están en e
 - Todas las operaciones son asíncronas (`Promise`).
 - Los errores son instancias de `ErrorDatos` con un código (`src/nucleo/datos/errores.js`):
   `CREDENCIALES_INVALIDAS`, `SIN_SESION`, `VALIDACION`, `NO_ENCONTRADO`, `SIN_PERMISO`,
-  `CONEXION`, `OPERACION_DUPLICADA`, `DESCONOCIDO`. El adaptador traduce los errores de la
-  base a estos códigos; la interfaz muestra `mensajeUsuario`, nunca el mensaje técnico.
+  `CONEXION`, `OPERACION_DUPLICADA`, `NOMBRE_DUPLICADO` (V2), `DESCONOCIDO`. El adaptador traduce
+  los errores de la base a estos códigos; la interfaz muestra `mensajeUsuario`, nunca el mensaje técnico.
+- `ErrorDatos` puede traer `campos` (V2): mensajes por campo del formulario, por ejemplo
+  `{ nombre: 'El nombre es obligatorio.' }`. La interfaz los muestra junto al campo.
 - Identificadores: texto estable (UUID recomendado). Nunca se reutilizan.
 - Cantidades y dinero viajan como **texto decimal** (por ejemplo `"3.5"`) y se calculan con
   `decimales.js`; nunca como números flotantes.
 - Fechas y horas se guardan en UTC, las asigna el servidor, y se muestran en `America/Costa_Rica`.
 - Nada se elimina físicamente: se desactiva o se anula con un movimiento nuevo.
 
-## 2. Sección implementada (Versión 1): `autenticacion`
+## 2. Secciones implementadas
+
+### 2.1 Versión 1: `autenticacion`
 | Operación | Resultado | Errores |
 |---|---|---|
 | `iniciarSesion(correo, clave)` | `Usuario {id, correo, nombre}` y deja sesión activa | `CREDENCIALES_INVALIDAS`, `VALIDACION`, `CONEXION` |
@@ -29,10 +33,30 @@ Las firmas son lo que debe respetar cualquier adaptador; los nombres están en e
 
 Cualquier adaptador debe pasar `ejecutarPruebasDeContrato` (`src/nucleo/datos/pruebasDeContrato.js`).
 
+### 2.2 Versión 2: `productos`
+Todas las operaciones exigen sesión (`SIN_SESION`). Los nombres de las operaciones siguen el Plan de
+versiones (`crearProducto`, etc.), no los nombres cortos que figuraban como previstos.
+
+| Operación | Resultado | Errores |
+|---|---|---|
+| `crearProducto({nombre})` | `Producto` | `VALIDACION` (con `campos.nombre`), `NOMBRE_DUPLICADO` |
+| `editarProducto(id, {nombre})` | `Producto` (mismo `id`) | `VALIDACION`, `NOMBRE_DUPLICADO`, `NO_ENCONTRADO` |
+| `obtenerProducto(id)` | `Producto` | `NO_ENCONTRADO` |
+| `listarProductos({busqueda, estado, pagina, tamanoPagina})` | `{items, total, pagina, tamanoPagina, totalPaginas}` | — |
+| `cambiarEstadoProducto(id, activo)` | `Producto` | `NO_ENCONTRADO`, `VALIDACION` |
+
+- `Producto`: `{id, nombre, nombreNormalizado, activo, unidadBaseId (null hasta la V3), creadoEn, actualizadoEn, creadoPor}`.
+- `estado` de `listarProductos`: `'activos'` (por defecto), `'inactivos'` o `'todos'`. Orden por nombre. Una página fuera de rango se acota a la última.
+- Reglas (en `src/nucleo/datos/productos.js`, reutilizables por cualquier adaptador): nombre de 2 a 120 caracteres sin espacios sobrantes; único por `nombreNormalizado`
+  (minúsculas, sin tildes, espacios colapsados; la ñ se conserva, PROVISIONAL); búsqueda sin mayúsculas ni tildes, todas las palabras deben aparecer.
+- No existe `eliminarProducto`: los productos nunca se borran, se desactivan. Un nombre usado por un producto inactivo tampoco se puede reutilizar.
+- Fechas, `creadoPor` e `id` los asigna la capa de datos, no la interfaz. En la base real: restricción de unicidad sobre `nombre_normalizado`.
+
 ## 3. Secciones previstas (se agregan al construir cada módulo)
+_(La Versión 2, `productos`, ya está en la sección 2.2.)_
+
 | Versión | Sección | Operaciones |
 |---|---|---|
-| 2 | `productos` | `listar({busqueda, estado, pagina})`, `obtener(id)`, `crear(datos)`, `editar(id, datos)`, `cambiarEstado(id, activo)` |
 | 3 | `unidades`, `presentaciones`, `conversiones` | CRUD de cada una; `convertir(productoId, cantidad, unidadOrigenId, unidadDestinoId)` → `{cantidad, factor, conversionId}` o error `ConversionNoConfigurada` |
 | 4 | `inventario` | `registrarMovimiento(entrada)` (ver sección 4), `listarExistencias({busqueda, pagina})`, `verificarConsistencia()` |
 | 5 | `compras` | `registrarCompra({fechaCompra, lineas[], nota, claveIdempotencia})`, `listar`, `obtener` |
