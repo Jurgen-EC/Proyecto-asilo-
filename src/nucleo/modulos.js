@@ -2,7 +2,7 @@
 // deshabilitados con la etiqueta "Próximamente". Al construir un módulo se cambia
 // su estado a 'disponible' y se registra su ruta en src/App.jsx.
 export const MODULOS = [
-  { id: 'productos',    nombre: 'Productos',               ruta: '/productos',    version: 2,  estado: 'proximamente', descripcion: 'Catálogo de productos' },
+  { id: 'productos',    nombre: 'Productos',               ruta: '/productos',    version: 2,  estado: 'disponible', descripcion: 'Catálogo de productos' },
   { id: 'unidades',     nombre: 'Unidades y conversiones', ruta: '/unidades',     version: 3,  estado: 'proximamente', descripcion: 'Unidades, presentaciones y equivalencias' },
   { id: 'inventario',   nombre: 'Inventario',              ruta: '/inventario',   version: 4,  estado: 'proximamente', descripcion: 'Existencias actuales' },
   { id: 'compras',      nombre: 'Compras',                 ruta: '/compras',      version: 5,  estado: 'proximamente', descripcion: 'Compras e ingresos' },
