@@ -1,3 +1,4 @@
+import { normalizarNombre, normalizarBusqueda, limpiarEspacios } from '../compartido/utilidades/texto.js';
 import { sumar, multiplicar, redondear, comparar, dividir } from '../compartido/utilidades/decimales.js';
 import { formatearDinero, formatearFechaHora, formatearFecha, formatearCantidad } from '../compartido/utilidades/formato.js';
 
@@ -33,5 +34,23 @@ describe('formato', () => {
   });
   it('formatea cantidades con unidad', () => {
     expect(formatearCantidad('1.5', 'kg')).toBe('1,5 kg');
+  });
+});
+
+describe('normalización de texto (productos)', () => {
+  it('normalizarNombre ignora mayúsculas, tildes y espacios sobrantes', () => {
+    expect(normalizarNombre('  AZÚCAR   blanca ')).toBe('azucar blanca');
+    expect(normalizarNombre('Papa')).toBe(normalizarNombre(' papa '));
+  });
+  it('normalizarNombre conserva la ñ como letra propia (piña ≠ pina)', () => {
+    expect(normalizarNombre('Piña')).toBe('piña');
+    expect(normalizarNombre('Piña')).not.toBe(normalizarNombre('Pina'));
+  });
+  it('normalizarBusqueda trata la ñ como n', () => {
+    expect(normalizarBusqueda('Piña')).toBe(normalizarBusqueda('pina'));
+  });
+  it('limpiarEspacios colapsa y recorta', () => {
+    expect(limpiarEspacios('  a   b  ')).toBe('a b');
+    expect(limpiarEspacios(null)).toBe('');
   });
 });
