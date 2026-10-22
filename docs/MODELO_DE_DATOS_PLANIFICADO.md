@@ -11,10 +11,13 @@ Todas las tablas incluyen `creado_en` y, cuando aplica, `creado_por` y `actualiz
 - **productos:** id, nombre, nombre_normalizado (único; minúsculas, sin tildes, espacios colapsados), activo, unidad_base_id (nulo hasta la V3).
 
 ## Versión 3 — unidades, presentaciones, conversiones
-- **unidades:** id, nombre, abreviatura, dimension (`masa`|`volumen`|`conteo`), activo.
-- **presentaciones:** id, producto_id, nombre, unidad_id, cantidad_contenida decimal(14,4), activo.
-- **conversiones:** id, producto_id (nulo = general), unidad_origen_id, unidad_destino_id, factor decimal(18,6) > 0, vigente.
-  Una conversión usada en un movimiento no se edita: se crea una nueva y la anterior queda no vigente.
+**Construida en la V3** (ver `ESTADO_V3.md` para el detalle de campos).
+- **unidades:** id, nombre, abreviatura, dimension (`masa`|`volumen`|`conteo`), activo, sugerida, nombre_normalizado (único), abreviatura_normalizada (único).
+- **presentaciones:** id, producto_id, nombre, nombre_normalizado (único por producto), unidad_id, cantidad_contenida decimal(14,4) > 0, activo.
+- **conversiones:** id, producto_id (nulo = general), unidad_origen_id, unidad_destino_id, factor decimal(18,6) > 0, vigente, sugerida, reemplaza_id, reemplazada_por_id.
+  1 origen = factor destino; sirve en los dos sentidos. Una sola vigente por par de unidades y alcance. El factor no se edita: se crea una versión nueva y la anterior queda no vigente.
+- **productos.unidad_base_id:** obligatoria al crear, llave foránea a `unidades` (nula solo en productos heredados de la V2 = INCOMPLETOS).
+- Datos iniciales: unidades kg, g, l, ml, u (sugeridas) y conversiones generales kg→g = 1000, l→ml = 1000.
 
 ## Versión 4 — movimientos y existencias
 - **movimientos:** id, producto_id, tipo (`ingreso`|`salida`|`ajuste`), subtipo (`compra`|`salida_general`|`consumo`|`ajuste_conteo`|`inventario_inicial`|`anulacion`), cantidad_original decimal(14,4), unidad_original_id, conversion_id, factor_aplicado, cantidad_base decimal(14,4), unidad_base_id, sentido (+1/-1), fecha_hora (servidor), usuario_id, clave_idempotencia (única), referencia_tipo, referencia_id, anulado_por_id (nulo), nota. **Inmutable.**

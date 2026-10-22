@@ -9,6 +9,8 @@ export const CODIGOS = Object.freeze({
   CONEXION: 'CONEXION',
   OPERACION_DUPLICADA: 'OPERACION_DUPLICADA',
   NOMBRE_DUPLICADO: 'NOMBRE_DUPLICADO',
+  CONVERSION_NO_CONFIGURADA: 'CONVERSION_NO_CONFIGURADA',
+  UNIDAD_INCOMPATIBLE: 'UNIDAD_INCOMPATIBLE',
   DESCONOCIDO: 'DESCONOCIDO',
 });
 
@@ -21,6 +23,8 @@ export const MENSAJES = Object.freeze({
   CONEXION: 'No se pudo conectar. Revisá tu conexión e intentá de nuevo.',
   OPERACION_DUPLICADA: 'Esta operación ya había sido registrada.',
   NOMBRE_DUPLICADO: 'Ya existe un producto con ese nombre.',
+  CONVERSION_NO_CONFIGURADA: 'No hay una equivalencia configurada entre esas unidades para este producto. Configurala en la pestaña Conversiones del producto.',
+  UNIDAD_INCOMPATIBLE: 'Esas unidades miden cosas distintas (por ejemplo masa y volumen) y no se pueden convertir sin una equivalencia configurada para este producto.',
   DESCONOCIDO: 'Ocurrió un error inesperado. Intentá de nuevo.',
 });
 
@@ -35,6 +39,14 @@ export class ErrorDatos extends Error {
   /** Mensaje seguro para mostrar al usuario final. */
   get mensajeUsuario() {
     return MENSAJES[this.codigo] ?? MENSAJES.DESCONOCIDO;
+  }
+}
+
+/** Se lanza cuando no existe una equivalencia configurada: nunca se asume una. */
+export class ConversionNoConfigurada extends ErrorDatos {
+  constructor(detalle, campos) {
+    super(CODIGOS.CONVERSION_NO_CONFIGURADA, detalle, campos);
+    this.name = 'ConversionNoConfigurada';
   }
 }
 

@@ -14,8 +14,11 @@ const MAX_OPCIONES = 8;
  *   onChange  (producto | null) => void
  *   etiqueta  texto visible del campo (por defecto "Producto")
  *   error     mensaje de error del campo (opcional)
+ *
+ * Desde la V3 solo ofrece productos COMPLETOS (con unidad base): un producto sin unidad base
+ * no se puede usar en operaciones. `incluirIncompletos` existe solo para pantallas de administración.
  */
-export default function SelectorDeProducto({ valor = null, onChange, etiqueta = 'Producto', error = '', deshabilitado = false, id: idExterno }) {
+export default function SelectorDeProducto({ valor = null, onChange, etiqueta = 'Producto', error = '', deshabilitado = false, incluirIncompletos = false, id: idExterno }) {
   const datos = useDatos();
   const idGenerado = useId();
   const id = idExterno ?? `selector-${idGenerado}`;
@@ -35,7 +38,7 @@ export default function SelectorDeProducto({ valor = null, onChange, etiqueta = 
     const numero = ++peticion.current;
     setCarga((c) => ({ ...c, estado: 'cargando' }));
     datos.productos
-      .listarProductos({ busqueda: consulta, estado: 'activos', tamanoPagina: MAX_OPCIONES })
+      .listarProductos({ busqueda: consulta, estado: 'activos', tamanoPagina: MAX_OPCIONES, soloCompletos: !incluirIncompletos })
       .then((r) => {
         if (numero !== peticion.current) return;
         setCarga({ estado: 'listo', items: r.items, total: r.total });
@@ -44,7 +47,7 @@ export default function SelectorDeProducto({ valor = null, onChange, etiqueta = 
       .catch((e) => {
         if (numero === peticion.current) setCarga({ estado: 'error', items: [], total: 0, mensaje: mensajeParaUsuario(e) });
       });
-  }, [datos, consulta, abierto, valor]);
+  }, [datos, consulta, abierto, valor, incluirIncompletos]);
 
   useEffect(() => {
     if (!valor && enfocarAlLimpiar.current) {
