@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useDatos } from '../../nucleo/datos/useDatos.js';
 import { mensajeParaUsuario } from '../../nucleo/datos/errores.js';
-import { TAMANO_PAGINA_DEFECTO } from '../../nucleo/datos/productos.js';
+import { TAMANO_PAGINA_DEFECTO, productoIncompleto } from '../../nucleo/datos/productos.js';
 import { useValorConRetardo } from '../../compartido/utilidades/useValorConRetardo.js';
 import Cargando from '../../compartido/componentes/Cargando.jsx';
 import EstadoVacio from '../../compartido/componentes/EstadoVacio.jsx';
@@ -24,6 +24,16 @@ export default function PaginaListaProductos() {
   const textoRetardado = useValorConRetardo(texto, 250);
   const [carga, setCarga] = useState({ cargando: true, error: '', resultado: null });
   const peticion = useRef(0);
+  const [unidadesPorId, setUnidadesPorId] = useState({});
+
+  // Las unidades se cargan una vez para mostrar la unidad base de cada producto.
+  useEffect(() => {
+    let activo = true;
+    datos.unidades.listarUnidades({ estado: 'todas' })
+      .then((lista) => { if (activo) setUnidadesPorId(Object.fromEntries(lista.map((u) => [u.id, u]))); })
+      .catch(() => { /* sin unidades la columna muestra un guion; la lista sigue funcionando */ });
+    return () => { activo = false; };
+  }, [datos]);
 
   // El estado de la búsqueda vive en la dirección: al volver desde un detalle se conserva.
   const cambiarParametros = useCallback((cambios) => {
@@ -99,12 +109,17 @@ export default function PaginaListaProductos() {
         <table className="tabla">
           <caption className="solo-lectores">Lista de productos</caption>
           <thead>
-            <tr><th scope="col">Nombre</th><th scope="col">Estado</th><th scope="col"><span className="solo-lectores">Acciones</span></th></tr>
+            <tr><th scope="col">Nombre</th><th scope="col">Unidad base</th><th scope="col">Estado</th><th scope="col"><span className="solo-lectores">Acciones</span></th></tr>
           </thead>
           <tbody>
             {resultado.items.map((p) => (
               <tr key={p.id}>
                 <td><Link to={`/productos/${p.id}`}>{p.nombre}</Link></td>
+                <td>
+                  {productoIncompleto(p)
+                    ? <span className="etiqueta etiqueta--aviso">Incompleto</span>
+                    : (unidadesPorId[p.unidadBaseId]?.abreviatura ?? '—')}
+                </td>
                 <td><span className={`etiqueta ${p.activo ? 'etiqueta--activo' : 'etiqueta--inactivo'}`}>{p.activo ? 'Activo' : 'Inactivo'}</span></td>
                 <td className="tabla__acciones"><Link to={`/productos/${p.id}/editar`} aria-label={`Editar ${p.nombre}`}>Editar</Link></td>
               </tr>

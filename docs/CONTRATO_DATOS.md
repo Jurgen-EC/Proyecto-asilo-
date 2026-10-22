@@ -11,7 +11,7 @@ Las firmas son lo que debe respetar cualquier adaptador; los nombres están en e
 - Todas las operaciones son asíncronas (`Promise`).
 - Los errores son instancias de `ErrorDatos` con un código (`src/nucleo/datos/errores.js`):
   `CREDENCIALES_INVALIDAS`, `SIN_SESION`, `VALIDACION`, `NO_ENCONTRADO`, `SIN_PERMISO`,
-  `CONEXION`, `OPERACION_DUPLICADA`, `NOMBRE_DUPLICADO` (V2), `DESCONOCIDO`. El adaptador traduce
+  `CONEXION`, `OPERACION_DUPLICADA`, `NOMBRE_DUPLICADO` (V2), `CONVERSION_NO_CONFIGURADA` y `UNIDAD_INCOMPATIBLE` (V3), `DESCONOCIDO`. El adaptador traduce
   los errores de la base a estos códigos; la interfaz muestra `mensajeUsuario`, nunca el mensaje técnico.
 - `ErrorDatos` puede traer `campos` (V2): mensajes por campo del formulario, por ejemplo
   `{ nombre: 'El nombre es obligatorio.' }`. La interfaz los muestra junto al campo.
@@ -39,25 +39,87 @@ versiones (`crearProducto`, etc.), no los nombres cortos que figuraban como prev
 
 | Operación | Resultado | Errores |
 |---|---|---|
-| `crearProducto({nombre})` | `Producto` | `VALIDACION` (con `campos.nombre`), `NOMBRE_DUPLICADO` |
-| `editarProducto(id, {nombre})` | `Producto` (mismo `id`) | `VALIDACION`, `NOMBRE_DUPLICADO`, `NO_ENCONTRADO` |
+| `crearProducto({nombre, unidadBaseId})` | `Producto` | `VALIDACION` (con `campos.nombre` y/o `campos.unidadBaseId`), `NOMBRE_DUPLICADO` |
+| `editarProducto(id, {nombre, unidadBaseId?})` | `Producto` (mismo `id`) | `VALIDACION`, `NOMBRE_DUPLICADO`, `NO_ENCONTRADO` |
 | `obtenerProducto(id)` | `Producto` | `NO_ENCONTRADO` |
-| `listarProductos({busqueda, estado, pagina, tamanoPagina})` | `{items, total, pagina, tamanoPagina, totalPaginas}` | — |
+| `listarProductos({busqueda, estado, pagina, tamanoPagina, soloCompletos})` | `{items, total, pagina, tamanoPagina, totalPaginas}` | — |
 | `cambiarEstadoProducto(id, activo)` | `Producto` | `NO_ENCONTRADO`, `VALIDACION` |
 
-- `Producto`: `{id, nombre, nombreNormalizado, activo, unidadBaseId (null hasta la V3), creadoEn, actualizadoEn, creadoPor}`.
+- `Producto`: `{id, nombre, nombreNormalizado, activo, unidadBaseId, creadoEn, actualizadoEn, creadoPor}`.
+- **Unidad base (V3):** `crearProducto` la exige (unidad existente y activa; el nombre y la unidad se validan juntos y los mensajes vienen a la vez en `campos`).
+  `editarProducto` valida y cambia la unidad base **solo si la entrada trae `unidadBaseId`**; si no la trae, la actual no se toca.
+  Un producto conserva su unidad base aunque esa unidad se desactive, pero no se le puede elegir una unidad inactiva.
+- **Producto INCOMPLETO:** el que no tiene unidad base (los creados en la V2). Sigue consultable y editable, pero no se puede usar en operaciones:
+  `listarProductos({soloCompletos: true})` lo deja fuera y `SelectorDeProducto` solo ofrece productos completos.
 - `estado` de `listarProductos`: `'activos'` (por defecto), `'inactivos'` o `'todos'`. Orden por nombre. Una página fuera de rango se acota a la última.
 - Reglas (en `src/nucleo/datos/productos.js`, reutilizables por cualquier adaptador): nombre de 2 a 120 caracteres sin espacios sobrantes; único por `nombreNormalizado`
   (minúsculas, sin tildes, espacios colapsados; la ñ se conserva, PROVISIONAL); búsqueda sin mayúsculas ni tildes, todas las palabras deben aparecer.
 - No existe `eliminarProducto`: los productos nunca se borran, se desactivan. Un nombre usado por un producto inactivo tampoco se puede reutilizar.
 - Fechas, `creadoPor` e `id` los asigna la capa de datos, no la interfaz. En la base real: restricción de unicidad sobre `nombre_normalizado`.
 
+### 2.3 Versión 3: `unidades`
+Todas las operaciones exigen sesión (`SIN_SESION`).
+
+| Operación | Resultado | Errores |
+|---|---|---|
+| `crearUnidad({nombre, abreviatura, dimension})` | `Unidad` | `VALIDACION` (con `campos.nombre`, `campos.abreviatura` o `campos.dimension`) |
+| `editarUnidad(id, {nombre, abreviatura, dimension})` | `Unidad` (mismo `id`) | `VALIDACION`, `NO_ENCONTRADO` |
+| `obtenerUnidad(id)` | `Unidad` | `NO_ENCONTRADO` |
+| `listarUnidades({estado})` | `Unidad[]` ordenadas por nombre | — |
+| `cambiarEstadoUnidad(id, activo)` | `Unidad` | `NO_ENCONTRADO`, `VALIDACION` |
+
+- `Unidad`: `{id, nombre, abreviatura, dimension, activo, sugerida, nombreNormalizado, abreviaturaNormalizada, creadoEn, actualizadoEn, creadoPor}`.
+- `dimension`: `'masa'`, `'volumen'` o `'conteo'`. `estado` de `listarUnidades`: `'activas'` (defecto), `'inactivas'` o `'todas'`.
+- Reglas (en `src/nucleo/datos/unidades.js`): nombre de 2 a 40 caracteres, abreviatura de 1 a 10, sin espacios sobrantes; nombre **y** abreviatura únicos por comparación normalizada (sin mayúsculas, tildes ni espacios sobrantes), incluyendo unidades inactivas.
+- Datos iniciales **sugeridos** (`sugerida: true`, editables, PROVISIONAL): Kilogramo (kg), Gramo (g), Litro (l), Mililitro (ml) y Unidad (u). En la base real son datos de la migración.
+- No existe `eliminarUnidad`: las unidades nunca se borran, se desactivan. Una unidad inactiva sigue siendo válida para lo que ya la usa, pero no se ofrece para configuraciones nuevas.
+- Una unidad que ya se usa (producto, presentación o equivalencia) no puede cambiar de dimensión.
+
+### 2.4 Versión 3: `presentaciones`
+Todas las operaciones exigen sesión (`SIN_SESION`).
+
+| Operación | Resultado | Errores |
+|---|---|---|
+| `crearPresentacion(productoId, {nombre, unidadId, cantidadContenida})` | `Presentacion` | `NO_ENCONTRADO` (producto), `VALIDACION` (con `campos`) |
+| `editarPresentacion(id, {nombre, unidadId, cantidadContenida})` | `Presentacion` (mismo `id` y producto) | `NO_ENCONTRADO`, `VALIDACION` |
+| `obtenerPresentacion(id)` | `Presentacion` | `NO_ENCONTRADO` |
+| `listarPresentaciones(productoId, {estado})` | `Presentacion[]` por nombre | `NO_ENCONTRADO` (producto) |
+| `cambiarEstadoPresentacion(id, activo)` | `Presentacion` | `NO_ENCONTRADO`, `VALIDACION` |
+
+- `Presentacion`: `{id, productoId, nombre, nombreNormalizado, unidadId, cantidadContenida, activo, creadoEn, actualizadoEn, creadoPor}`. Ejemplo: Caja = 12 unidades.
+- `cantidadContenida` viaja como texto decimal mayor que cero, hasta 4 decimales (se acepta coma o punto al escribirla y se guarda con punto).
+- Reglas (en `src/nucleo/datos/presentaciones.js`): nombre de 2 a 60 caracteres, único **dentro del producto** (normalizado, incluye inactivas); unidad existente y activa (o la que ya tenía).
+- Cada producto define sus presentaciones: no se asume que todas las cajas contienen lo mismo. Editar el contenido no reescribe el historial: los movimientos (V4) guardarán el factor con el que se registraron.
+- Nunca se borran, se desactivan.
+
+### 2.5 Versión 3: `conversiones` y la función `convertir`
+Todas las operaciones exigen sesión (`SIN_SESION`).
+
+| Operación | Resultado | Errores |
+|---|---|---|
+| `crearConversion({productoId\|null, unidadOrigenId, unidadDestinoId, factor})` | `Conversion` | `VALIDACION` (con `campos`), `NO_ENCONTRADO` (producto) |
+| `cambiarFactorConversion(id, factor)` | `Conversion` **nueva**; la anterior queda no vigente | `VALIDACION`, `NO_ENCONTRADO` |
+| `retirarConversion(id)` | `Conversion` no vigente (no se borra) | `VALIDACION`, `NO_ENCONTRADO` |
+| `obtenerConversion(id)` | `Conversion` | `NO_ENCONTRADO` |
+| `listarConversiones({productoId = null, vigentes = true})` | `Conversion[]` (`productoId` nulo = generales) | `NO_ENCONTRADO` (producto) |
+| `convertir(productoId, cantidad, origen, destino)` | `{cantidad, factor, conversionId, redondeado, presentacionOrigenId, presentacionDestinoId}` | `CONVERSION_NO_CONFIGURADA`, `UNIDAD_INCOMPATIBLE`, `VALIDACION`, `NO_ENCONTRADO` |
+
+- `Conversion`: `{id, productoId (null = general), unidadOrigenId, unidadDestinoId, factor, vigente, sugerida, reemplazaId, reemplazadaPorId, creadoEn, creadoPor}`. Significa **1 origen = `factor` destino**. Una fila sirve en los dos sentidos (la inversa es 1 / factor, con decimales exactos).
+- `factor`: texto decimal mayor que cero, hasta 6 decimales (`decimal(18,6)`).
+- **Alcance:** una conversión **general** solo une unidades de la misma dimensión; una conversión **de un producto** puede cruzar dimensiones (1 l de aceite = 0,92 kg) y tiene prioridad sobre la general. Solo hay una vigente por par de unidades (en cualquier sentido) y alcance: no se aceptan duplicadas ni circulares.
+- **Versionado:** el factor nunca se edita en el lugar. `cambiarFactorConversion` crea una versión nueva y deja la anterior no vigente. PROVISIONAL: se aplica siempre, aunque la anterior no se haya usado todavía (a partir de la V4, los movimientos guardan `conversion_id` y `factor_aplicado`).
+- Datos iniciales sugeridos: kg → g (1000) y l → ml (1000), como filas generales explícitas.
+- `convertir`: `origen`/`destino` son un id de unidad o `{presentacionId}` (la presentación debe ser del producto y estar activa). Factor total = contenido de la presentación de origen × equivalencia entre unidades ÷ contenido de la de destino. Resultado a 4 decimales, redondeo half-up (regla de redondeo PROVISIONAL: constante única en `decimales.js`); `redondeado` avisa si hubo redondeo.
+- Si no hay equivalencia: `CONVERSION_NO_CONFIGURADA` (error `ConversionNoConfigurada`) para unidades de la misma dimensión, `UNIDAD_INCOMPATIBLE` para dimensiones distintas (por ejemplo litros a kilogramos). **Nunca se asume una equivalencia.**
+- Solo hay conversión directa (una fila) más el paso por la presentación; no se encadenan equivalencias (kg → g → mg). Quien necesite mg configura kg ↔ mg.
+- Reglas puras en `src/nucleo/datos/conversiones.js`, reutilizables por cualquier adaptador.
+
 ## 3. Secciones previstas (se agregan al construir cada módulo)
-_(La Versión 2, `productos`, ya está en la sección 2.2.)_
+_(Las versiones 2 y 3 ya están en las secciones 2.2 y 2.3; ver la V3 completa en `ESTADO_V3.md` cuando se cierre.)_
 
 | Versión | Sección | Operaciones |
 |---|---|---|
-| 3 | `unidades`, `presentaciones`, `conversiones` | CRUD de cada una; `convertir(productoId, cantidad, unidadOrigenId, unidadDestinoId)` → `{cantidad, factor, conversionId}` o error `ConversionNoConfigurada` |
+| 3 | `unidades`, `presentaciones` y `conversiones` (hechas) | CRUD de cada una; `convertir(productoId, cantidad, origen, destino)` → `{cantidad, factor, conversionId, ...}` o error `ConversionNoConfigurada` |
 | 4 | `inventario` | `registrarMovimiento(entrada)` (ver sección 4), `listarExistencias({busqueda, pagina})`, `verificarConsistencia()` |
 | 5 | `compras` | `registrarCompra({fechaCompra, lineas[], nota, claveIdempotencia})`, `listar`, `obtener` |
 | 6 | `salidas`, `consumos` | `registrarSalida`, `registrarConsumo`, `listar` |

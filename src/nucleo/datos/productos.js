@@ -31,22 +31,52 @@ export function errorNombreDuplicado(existente) {
   return new ErrorDatos(CODIGOS.NOMBRE_DUPLICADO, mensaje, { nombre: mensaje });
 }
 
+// ---- Unidad base (Versión 3) ----
+// Todo producto debe tener una unidad base: la unidad en la que se controla su existencia.
+// Los productos creados en la V2 sin unidad base quedan como INCOMPLETOS y no se pueden usar
+// en operaciones (ni aparecen en SelectorDeProducto) hasta completarla.
+export const MENSAJE_UNIDAD_BASE_OBLIGATORIA = 'Elegí la unidad base del producto.';
+
+export function productoIncompleto(producto) {
+  return !producto?.unidadBaseId;
+}
+
+/**
+ * Devuelve el mensaje de error de la unidad base elegida, o '' si es válida.
+ * `unidadActualId` es la unidad que el producto ya tiene: se acepta aunque esté inactiva (no se obliga a cambiarla).
+ */
+export function mensajeUnidadBase(unidadBaseId, unidades, unidadActualId = null) {
+  if (typeof unidadBaseId !== 'string' || !unidadBaseId) return MENSAJE_UNIDAD_BASE_OBLIGATORIA;
+  const unidad = unidades.find((u) => u.id === unidadBaseId);
+  if (!unidad) return 'La unidad elegida no existe.';
+  if (!unidad.activo && unidadBaseId !== unidadActualId) return 'La unidad elegida está inactiva. Elegí otra o activala primero.';
+  return '';
+}
+
+/** Lanza VALIDACION con todos los mensajes por campo juntos (para que el formulario los muestre a la vez). */
+export function lanzarSiHayCampos(campos) {
+  const primero = Object.values(campos)[0];
+  if (primero) throw new ErrorDatos(CODIGOS.VALIDACION, primero, campos);
+}
+
 /** Completa y acota los parámetros de listarProductos. */
-export function normalizarConsulta({ busqueda = '', estado = 'activos', pagina = 1, tamanoPagina = TAMANO_PAGINA_DEFECTO } = {}) {
+export function normalizarConsulta({ busqueda = '', estado = 'activos', pagina = 1, tamanoPagina = TAMANO_PAGINA_DEFECTO, soloCompletos = false } = {}) {
   const tamano = Math.min(TAMANO_PAGINA_MAX, Math.max(1, Math.floor(Number(tamanoPagina)) || TAMANO_PAGINA_DEFECTO));
   return {
     busqueda: String(busqueda ?? ''),
     estado: ESTADOS_FILTRO.includes(estado) ? estado : 'activos',
     pagina: Math.max(1, Math.floor(Number(pagina)) || 1),
     tamanoPagina: tamano,
+    soloCompletos: soloCompletos === true,
   };
 }
 
 /** Aplica filtro de estado y búsqueda (sin tildes ni mayúsculas; todas las palabras deben aparecer) y ordena por nombre. */
-export function filtrarYOrdenar(productos, { busqueda, estado }) {
+export function filtrarYOrdenar(productos, { busqueda, estado, soloCompletos = false }) {
   const palabras = normalizarBusqueda(busqueda).split(' ').filter(Boolean);
   return productos
     .filter((p) => estado === 'todos' || (estado === 'activos' ? p.activo : !p.activo))
+    .filter((p) => !soloCompletos || !productoIncompleto(p))
     .filter((p) => {
       const nombre = normalizarBusqueda(p.nombre);
       return palabras.every((palabra) => nombre.includes(palabra));

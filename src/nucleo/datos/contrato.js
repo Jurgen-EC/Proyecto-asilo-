@@ -22,19 +22,55 @@
  * }
  *
  *   productos: {                    // Versión 2. Todas exigen sesión (SIN_SESION).
- *     crearProducto({ nombre })                      -> Promise<Producto>   // VALIDACION | NOMBRE_DUPLICADO
- *     editarProducto(id, { nombre })                 -> Promise<Producto>   // VALIDACION | NOMBRE_DUPLICADO | NO_ENCONTRADO
+ *     crearProducto({ nombre, unidadBaseId })        -> Promise<Producto>   // VALIDACION (campos.nombre / campos.unidadBaseId) | NOMBRE_DUPLICADO
+ *     editarProducto(id, { nombre, unidadBaseId? })  -> Promise<Producto>   // VALIDACION | NOMBRE_DUPLICADO | NO_ENCONTRADO
+ *                                                    // Si no se envía unidadBaseId, la actual no cambia.
  *     obtenerProducto(id)                            -> Promise<Producto>   // NO_ENCONTRADO
- *     listarProductos({ busqueda, estado, pagina, tamanoPagina })
+ *     listarProductos({ busqueda, estado, pagina, tamanoPagina, soloCompletos })
  *                                                    -> Promise<{ items, total, pagina, tamanoPagina, totalPaginas }>
  *                                                    // estado: 'activos' (defecto) | 'inactivos' | 'todos'; orden por nombre
  *     cambiarEstadoProducto(id, activo: boolean)     -> Promise<Producto>   // NO_ENCONTRADO
  *   }                                 // No existe eliminarProducto: los productos nunca se borran, se desactivan.
  *
+ *   unidades: {                     // Versión 3. Todas exigen sesión (SIN_SESION).
+ *     crearUnidad({ nombre, abreviatura, dimension })        -> Promise<Unidad>   // VALIDACION (con campos)
+ *     editarUnidad(id, { nombre, abreviatura, dimension })   -> Promise<Unidad>   // VALIDACION | NO_ENCONTRADO
+ *     obtenerUnidad(id)                                      -> Promise<Unidad>   // NO_ENCONTRADO
+ *     listarUnidades({ estado })                             -> Promise<Unidad[]> // estado: 'activas' (defecto) | 'inactivas' | 'todas'
+ *     cambiarEstadoUnidad(id, activo: boolean)               -> Promise<Unidad>   // NO_ENCONTRADO | VALIDACION
+ *   }                                 // No existe eliminarUnidad: las unidades nunca se borran, se desactivan.
+ *
+ *   presentaciones: {               // Versión 3. Todas exigen sesión (SIN_SESION).
+ *     crearPresentacion(productoId, { nombre, unidadId, cantidadContenida })   -> Promise<Presentacion>  // NO_ENCONTRADO (producto) | VALIDACION (con campos)
+ *     editarPresentacion(id, { nombre, unidadId, cantidadContenida })          -> Promise<Presentacion>  // NO_ENCONTRADO | VALIDACION
+ *     obtenerPresentacion(id)                                                  -> Promise<Presentacion>  // NO_ENCONTRADO
+ *     listarPresentaciones(productoId, { estado })                             -> Promise<Presentacion[]> // 'activas' (defecto) | 'inactivas' | 'todas'; NO_ENCONTRADO si no existe el producto
+ *     cambiarEstadoPresentacion(id, activo: boolean)                           -> Promise<Presentacion>  // NO_ENCONTRADO | VALIDACION
+ *   }                                 // No existe eliminarPresentacion: se desactivan.
+ *
+ *   conversiones: {                 // Versión 3. Todas exigen sesión (SIN_SESION).
+ *     crearConversion({ productoId|null, unidadOrigenId, unidadDestinoId, factor })  -> Promise<Conversion>  // VALIDACION (con campos) | NO_ENCONTRADO (producto)
+ *     cambiarFactorConversion(id, factor)    -> Promise<Conversion>   // crea una versión NUEVA y deja la anterior no vigente; VALIDACION | NO_ENCONTRADO
+ *     retirarConversion(id)                  -> Promise<Conversion>   // la deja no vigente (no se borra); NO_ENCONTRADO | VALIDACION
+ *     obtenerConversion(id)                  -> Promise<Conversion>   // NO_ENCONTRADO
+ *     listarConversiones({ productoId = null, vigentes = true }) -> Promise<Conversion[]>  // productoId null = generales
+ *     convertir(productoId, cantidad, origen, destino) -> Promise<{ cantidad, factor, conversionId, redondeado, presentacionOrigenId, presentacionDestinoId }>
+ *         // origen/destino: id de unidad o { presentacionId }. Errores: CONVERSION_NO_CONFIGURADA (ConversionNoConfigurada),
+ *         // UNIDAD_INCOMPATIBLE, VALIDACION, NO_ENCONTRADO. NUNCA asume una equivalencia.
+ *   }
+ *
  * Usuario:  { id: string, correo: string, nombre: string }
- * Producto: { id, nombre, nombreNormalizado, activo, unidadBaseId (null hasta la V3),
+ * Producto: { id, nombre, nombreNormalizado, activo, unidadBaseId (obligatoria desde la V3; null = INCOMPLETO),
  *             creadoEn, actualizadoEn (ISO), creadoPor (id del usuario) }
  * Reglas del catálogo (nombre 2-120, sin espacios sobrantes, único normalizado): ver productos.js
+ * Unidad:   { id, nombre, abreviatura, dimension: 'masa'|'volumen'|'conteo', activo, sugerida,
+ *             nombreNormalizado, abreviaturaNormalizada, creadoEn, actualizadoEn (ISO), creadoPor }
+ * Reglas de las unidades (nombre y abreviatura únicos normalizados): ver unidades.js
+ * Presentacion: { id, productoId, nombre, nombreNormalizado, unidadId, cantidadContenida (texto decimal > 0, hasta 4 decimales),
+ *                 activo, creadoEn, actualizadoEn (ISO), creadoPor }.  Ejemplo: Caja = 12 unidades.
+ * Reglas de las presentaciones (nombre único por producto, cantidad > 0): ver presentaciones.js
+ * Conversion: { id, productoId (null = general), unidadOrigenId, unidadDestinoId, factor (1 origen = factor destino), vigente,
+ *               sugerida, reemplazaId, reemplazadaPorId, creadoEn, creadoPor }.  Reglas y función de cálculo: conversiones.js
  *
  * Las versiones siguientes AGREGAN secciones al adaptador (productos, unidades,
  * movimientos, ...) sin cambiar las existentes. Ver docs/CONTRATO_DATOS.md.
@@ -43,6 +79,9 @@
 const SECCIONES_REQUERIDAS = {
   autenticacion: ['iniciarSesion', 'cerrarSesion', 'obtenerSesion', 'alCambiarSesion'],
   productos: ['crearProducto', 'editarProducto', 'obtenerProducto', 'listarProductos', 'cambiarEstadoProducto'],
+  unidades: ['crearUnidad', 'editarUnidad', 'obtenerUnidad', 'listarUnidades', 'cambiarEstadoUnidad'],
+  conversiones: ['crearConversion', 'cambiarFactorConversion', 'retirarConversion', 'obtenerConversion', 'listarConversiones', 'convertir'],
+  presentaciones: ['crearPresentacion', 'editarPresentacion', 'obtenerPresentacion', 'listarPresentaciones', 'cambiarEstadoPresentacion'],
 };
 
 export function validarAdaptador(adaptador) {

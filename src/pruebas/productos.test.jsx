@@ -35,9 +35,11 @@ async function montar(ruta = '/productos', { conSesion = true, contenido } = {})
   return datos;
 }
 
+// Desde la V3 todo producto exige unidad base: se siembra con la primera unidad sugerida.
 const sembrar = async (datos, nombres) => {
+  const [unidad] = await datos.unidades.listarUnidades();
   const creados = [];
-  for (const nombre of nombres) creados.push(await datos.productos.crearProducto({ nombre }));
+  for (const nombre of nombres) creados.push(await datos.productos.crearProducto({ nombre, unidadBaseId: unidad.id }));
   return creados;
 };
 const ubicacion = () => screen.getByTestId('ubicacion').textContent;
@@ -117,10 +119,12 @@ describe('crear producto', () => {
     const u = userEvent.setup();
     const datos = await montar('/productos/nuevo');
     await u.type(await screen.findByLabelText('Nombre del producto'), '  Papa ');
+    await u.selectOptions(screen.getByLabelText('Unidad base'), 'Kilogramo (kg)');
     await u.click(screen.getByRole('button', { name: 'Crear producto' }));
     expect(await screen.findByRole('heading', { name: 'Papa', level: 1 })).toBeInTheDocument();
     expect(screen.getByText('Producto creado.')).toBeInTheDocument();
     expect(screen.getByText('Activo')).toBeInTheDocument();
+    expect(screen.getByText('Kilogramo (kg)')).toBeInTheDocument();
     await u.click(screen.getByRole('link', { name: 'Volver a la lista' }));
     expect(await screen.findByRole('link', { name: 'Papa' })).toBeInTheDocument();
     expect((await datos.productos.listarProductos({ estado: 'todos' })).total).toBe(1);
@@ -138,6 +142,7 @@ describe('crear producto', () => {
     );
     const campo = await screen.findByLabelText('Nombre del producto');
     await u.type(campo, ' papa ');
+    await u.selectOptions(screen.getByLabelText('Unidad base'), 'Kilogramo (kg)');
     await u.click(screen.getByRole('button', { name: 'Crear producto' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Ya existe un producto con ese nombre.');
     expect(campo).toHaveAttribute('aria-invalid', 'true');
@@ -149,8 +154,11 @@ describe('crear producto', () => {
     const u = userEvent.setup();
     await montar('/productos/nuevo');
     await u.click(await screen.findByRole('button', { name: 'Crear producto' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('El nombre es obligatorio.');
+    // el nombre y la unidad base se validan juntos: los dos mensajes aparecen a la vez
+    const alertas = await screen.findAllByRole('alert');
+    expect(alertas.map((a) => a.textContent)).toEqual(['El nombre es obligatorio.', 'Elegí la unidad base del producto.']);
     await u.type(screen.getByLabelText('Nombre del producto'), 'a');
+    await u.selectOptions(screen.getByLabelText('Unidad base'), 'Kilogramo (kg)');
     await u.click(screen.getByRole('button', { name: 'Crear producto' }));
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/al menos 2 caracteres/i));
   });

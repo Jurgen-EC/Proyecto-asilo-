@@ -12,6 +12,7 @@ Son las tareas que quedaron **pendientes de la Versión 1** (estimación origina
 | BD-4 Adaptador real | Escribir `src/nucleo/datos/adaptador<Nombre>.js` con `autenticacion` según `CONTRATO_DATOS.md`; registrarlo en `FABRICAS` de `src/nucleo/datos/index.js`; poner el nombre en `VITE_ADAPTADOR_DATOS` | 1,5 |
 | BD-5 Verificar | Pasar `ejecutarPruebasDeContrato` con el adaptador nuevo; confirmar que ya no aparece el banner de demostración | (incluida en BD-4) |
 | BD-6 Productos (V2) | Crear la tabla `productos` (ver `MODELO_DE_DATOS_PLANIFICADO.md`) y la sección `productos` del adaptador real (contrato 2.2); pasar las pruebas de contrato de productos | por estimar |
+| BD-7 Unidades, presentaciones y conversiones (V3) | Crear las tablas `unidades`, `presentaciones` y `conversiones` y la llave foránea `productos.unidad_base_id`; cargar los datos iniciales sugeridos (kg, g, l, ml, u y kg→g, l→ml); implementar las secciones 2.3 a 2.5 del contrato reutilizando `unidades.js`, `presentaciones.js` y `conversiones.js` (incluida `convertirCantidad`); restricciones: unicidad de nombre y abreviatura normalizados, nombre de presentación único por producto, una conversión vigente por par y alcance, factor > 0; pasar las pruebas de contrato | por estimar |
 
 ## Pasos
 1. Completar ADR-001.
