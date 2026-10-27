@@ -6,6 +6,17 @@ ejecutarPruebasDeContrato(
   'adaptador demo',
   () => crearAdaptadorDemo({ retardoMs: 0 }),
   { correo: USUARIO_DEMO.correo, clave: CLAVE_DEMO },
+  {
+    // Simula un fallo a mitad de registrarMovimiento (después de insertar el movimiento, antes de confirmar).
+    crearConFalloSimulado: () => {
+      const ganchos = {};
+      return {
+        adaptador: crearAdaptadorDemo({ retardoMs: 0, ganchos }),
+        provocarFallo: () => { ganchos.despuesDeInsertarMovimiento = () => { throw new Error('Fallo simulado'); }; },
+        restaurar: () => { delete ganchos.despuesDeInsertarMovimiento; },
+      };
+    },
+  },
 );
 
 describe('selección de adaptador', () => {
