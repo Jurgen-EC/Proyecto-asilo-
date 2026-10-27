@@ -162,3 +162,16 @@ a:focus-visible, select:focus-visible, button:focus-visible, .tarjeta--enlace:fo
 .casilla { display: inline-flex; align-items: center; gap: .5rem; min-height: 44px; }
 .casilla input { width: 20px; height: 20px; }
 .resultado-conversion { margin: 0; font-weight: 700; color: var(--exito); }
+
+/* ---- Inventario (Versión 4) ---- */
+.tabla__numero { text-align: right !important; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tabla td .etiqueta + .etiqueta { margin-left: .4rem; }
+.aviso-lista { background: var(--aviso); color: var(--aviso-texto); border-radius: 8px; padding: .6rem .9rem; margin: 0 0 .75rem; }
+.aviso-lista a { color: inherit; font-weight: 700; text-decoration: underline; }
+.panel-demo { margin-top: 1.5rem; border: 2px dashed var(--aviso-texto); border-radius: 12px; background: var(--superficie); }
+.panel-demo > summary { cursor: pointer; padding: .8rem 1rem; font-weight: 700; color: var(--aviso-texto); min-height: 44px; }
+.panel-demo__cuerpo { padding: 0 1rem 1rem; }
+.formulario-linea { display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-start; }
+.formulario-linea .boton { align-self: flex-end; }
+.formulario-linea .selector { flex: 1 1 260px; }
+
