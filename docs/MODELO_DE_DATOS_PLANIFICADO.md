@@ -20,8 +20,15 @@ Todas las tablas incluyen `creado_en` y, cuando aplica, `creado_por` y `actualiz
 - Datos iniciales: unidades kg, g, l, ml, u (sugeridas) y conversiones generales kg→g = 1000, l→ml = 1000.
 
 ## Versión 4 — movimientos y existencias
-- **movimientos:** id, producto_id, tipo (`ingreso`|`salida`|`ajuste`), subtipo (`compra`|`salida_general`|`consumo`|`ajuste_conteo`|`inventario_inicial`|`anulacion`), cantidad_original decimal(14,4), unidad_original_id, conversion_id, factor_aplicado, cantidad_base decimal(14,4), unidad_base_id, sentido (+1/-1), fecha_hora (servidor), usuario_id, clave_idempotencia (única), referencia_tipo, referencia_id, anulado_por_id (nulo), nota. **Inmutable.**
+**Construida en la V4** (ver `ESTADO_V4.md` para el detalle).
+- **movimientos:** id, producto_id, tipo (`ingreso`|`salida`|`ajuste`), subtipo (`compra`|`salida_general`|`consumo`|`ajuste_conteo`|`inventario_inicial`|`anulacion`),
+  sentido (+1/-1), cantidad_original decimal(14,4), unidad_original_id, **presentacion_original_id** (nulo; si se registró en cajas, bolsas, etc.),
+  conversion_id (nulo si no hubo conversión), factor_aplicado (factor total usado, decimal de alta precisión, p. ej. decimal(38,20)), **redondeado** (booleano),
+  cantidad_base decimal(14,4) > 0, unidad_base_id, fecha_hora (servidor), usuario_id, clave_idempotencia (única), referencia_tipo, referencia_id, nota. **Inmutable.**
 - **existencias:** producto_id (único), cantidad_base decimal(14,4) ≥ 0, actualizado_en. Solo la modifica `registrarMovimiento`.
+- Restricciones: `clave_idempotencia` única; `sentido` solo +1 o -1; `cantidad_base > 0` en movimientos y `>= 0` en existencias; sin `UPDATE` ni `DELETE` sobre movimientos.
+- **Cambios respecto al modelo original:** se agregaron `presentacion_original_id` y `redondeado` (trazabilidad de lo registrado) y **se quitó `anulado_por_id`**, porque
+  contradice la inmutabilidad (habría que modificar el movimiento original). La V12 resuelve las anulaciones con un movimiento nuevo (`subtipo = anulacion`) que referencia al original (`referencia_tipo`, `referencia_id`).
 
 ## Versión 5 — compras
 - **compras:** id, fecha_compra (no futura), registrada_en, usuario_id, nota, total decimal(14,2).

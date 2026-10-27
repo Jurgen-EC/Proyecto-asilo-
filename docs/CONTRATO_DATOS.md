@@ -11,7 +11,7 @@ Las firmas son lo que debe respetar cualquier adaptador; los nombres están en e
 - Todas las operaciones son asíncronas (`Promise`).
 - Los errores son instancias de `ErrorDatos` con un código (`src/nucleo/datos/errores.js`):
   `CREDENCIALES_INVALIDAS`, `SIN_SESION`, `VALIDACION`, `NO_ENCONTRADO`, `SIN_PERMISO`,
-  `CONEXION`, `OPERACION_DUPLICADA`, `NOMBRE_DUPLICADO` (V2), `CONVERSION_NO_CONFIGURADA` y `UNIDAD_INCOMPATIBLE` (V3), `DESCONOCIDO`. El adaptador traduce
+  `CONEXION`, `OPERACION_DUPLICADA`, `NOMBRE_DUPLICADO` (V2), `CONVERSION_NO_CONFIGURADA` y `UNIDAD_INCOMPATIBLE` (V3), `DESCONOCIDO`. En la V4 una salida mayor a la existencia lanza `VALIDACION` con `campos.cantidad` y la propiedad `disponible` (texto decimal, en la unidad base). El adaptador traduce
   los errores de la base a estos códigos; la interfaz muestra `mensajeUsuario`, nunca el mensaje técnico.
 - `ErrorDatos` puede traer `campos` (V2): mensajes por campo del formulario, por ejemplo
   `{ nombre: 'El nombre es obligatorio.' }`. La interfaz los muestra junto al campo.
@@ -114,13 +114,47 @@ Todas las operaciones exigen sesión (`SIN_SESION`).
 - Solo hay conversión directa (una fila) más el paso por la presentación; no se encadenan equivalencias (kg → g → mg). Quien necesite mg configura kg ↔ mg.
 - Reglas puras en `src/nucleo/datos/conversiones.js`, reutilizables por cualquier adaptador.
 
+### 2.6 Versión 4: `inventario`
+Todas las operaciones exigen sesión (`SIN_SESION`). **`registrarMovimiento` es la única forma de cambiar existencias.**
+
+| Operación | Resultado | Errores |
+|---|---|---|
+| `registrarMovimiento(entrada)` | `{movimiento, existencia, repetido}` | `VALIDACION` (con `campos`), `NO_ENCONTRADO` (producto, unidad o presentación), `CONVERSION_NO_CONFIGURADA`, `UNIDAD_INCOMPATIBLE`, `OPERACION_DUPLICADA` |
+| `listarExistencias({busqueda, estado, pagina, tamanoPagina})` | `{items, total, pagina, tamanoPagina, totalPaginas, incompletos}` | — |
+| `obtenerExistencia(productoId)` | `{productoId, cantidadBase, unidadBase, actualizadoEn, sinExistencia}` | `NO_ENCONTRADO` |
+| `verificarConsistencia()` | `{consistente, productosRevisados, movimientosRevisados, discrepancias[]}` | — |
+| `alCambiarInventario(callback)` | función para desuscribirse; el callback recibe `{productoId, movimientoId}` tras cada movimiento **aceptado** | — |
+
+**Entrada de `registrarMovimiento`:** `{productoId, tipo, subtipo, cantidad, unidadId | presentacionId, sentido?, referenciaTipo?, referenciaId?, nota?, claveIdempotencia}`.
+- `tipo`: `ingreso` (suma), `salida` (resta) o `ajuste` (debe traer `sentido`: `1` suma, `-1` resta; PROVISIONAL, lo afina la V12).
+- `subtipo` permitido por tipo (PROVISIONAL): ingreso → `compra`, `inventario_inicial`; salida → `salida_general`, `consumo`; ajuste → `ajuste_conteo`, `anulacion`.
+- Se indica la unidad **o** la presentación (por ejemplo 3 cajas), nunca las dos. La cantidad se acepta con coma o punto.
+- **No se recibe** la fecha, la hora ni el usuario: los asigna la capa de datos (si llegan, se ignoran).
+
+**Una sola transacción** (todo o nada): 1) producto existente, activo y **completo** (con unidad base); 2) validar y convertir a la unidad base con `convertir` (V3), guardando lo usado; 3) si resta, verificar existencia suficiente; 4) insertar el movimiento; 5) actualizar la existencia. Si algo falla no queda nada guardado.
+- **Salida mayor a la existencia:** se rechaza (`VALIDACION`, `campos.cantidad` = «No hay cantidad suficiente de «X». Disponible: 4 kg.», propiedad `disponible`), no cambia nada y **nunca** se convierte en ajuste, ingreso ni compra. La existencia nunca queda negativa (tampoco con un ajuste que resta).
+- **Idempotencia:** la misma `claveIdempotencia` con la misma operación devuelve el movimiento original (`repetido: true`, y la existencia actual) sin duplicar, aunque ahora ya no alcanzara la existencia. La misma clave con **otra** operación se rechaza con `OPERACION_DUPLICADA` (PROVISIONAL).
+- **Concurrencia:** dos operaciones simultáneas sobre el mismo producto no se pisan (dos salidas de 3 con existencia 5: solo una se acepta).
+- **Inmutabilidad:** no existen operaciones para editar o borrar movimientos ni para fijar una existencia a mano. Las correcciones son movimientos nuevos (V12).
+- Si la cantidad se redondea (4 decimales, half-up) queda registrado en `redondeado`; una cantidad que queda en cero al convertir se rechaza.
+- **Unidad base:** con movimientos registrados, `editarProducto` ya no permite cambiarla (`VALIDACION`, `campos.unidadBaseId`).
+
+**`Movimiento`:** `{id, productoId, tipo, subtipo, sentido, cantidadOriginal, unidadOriginalId, presentacionOriginalId, factorAplicado, conversionId, redondeado, cantidadBase, unidadBaseId, fechaHora, usuarioId, claveIdempotencia, referenciaTipo, referenciaId, nota}`.
+Guarda la cantidad y la unidad **originales**, el factor y la conversión **usados** (así cambiar después una equivalencia o una presentación no reescribe el historial) y la cantidad base.
+
+**`listarExistencias`:** solo productos **completos**, ordenados por nombre; `estado` como en productos (`'activos'` por defecto). Cada ítem: `{productoId, nombre, activo, unidadBase: {id, nombre, abreviatura}, cantidadBase, actualizadoEn, sinExistencia}`; un producto sin movimientos tiene existencia `"0"`. `incompletos` cuenta los productos del mismo filtro que no aparecen por no tener unidad base.
+
+**`verificarConsistencia`:** compara, por producto, la suma de `sentido × cantidadBase` de sus movimientos contra la existencia guardada; `discrepancias` lista las diferencias.
+
+**Para la base real:** bloqueo de fila (`SELECT … FOR UPDATE`) o actualización condicional dentro de una función transaccional; índice único sobre `clave_idempotencia`; `CHECK (cantidad_base >= 0)` en existencias; sin permisos de `UPDATE`/`DELETE` sobre `movimientos`; reglas puras reutilizables en `src/nucleo/datos/inventario.js`; `alCambiarInventario` con la suscripción en tiempo real de la base o una consulta periódica. Las pruebas de contrato incluyen una de **atomicidad** que cada adaptador activa con `crearConFalloSimulado`.
+
 ## 3. Secciones previstas (se agregan al construir cada módulo)
-_(Las versiones 2 y 3 ya están en las secciones 2.2 y 2.3; ver la V3 completa en `ESTADO_V3.md` cuando se cierre.)_
+_(Las versiones 2, 3 y 4 ya están en las secciones 2.2 a 2.6; ver `ESTADO_V2.md`, `ESTADO_V3.md` y `ESTADO_V4.md`.)_
 
 | Versión | Sección | Operaciones |
 |---|---|---|
 | 3 | `unidades`, `presentaciones` y `conversiones` (hechas) | CRUD de cada una; `convertir(productoId, cantidad, origen, destino)` → `{cantidad, factor, conversionId, ...}` o error `ConversionNoConfigurada` |
-| 4 | `inventario` | `registrarMovimiento(entrada)` (ver sección 4), `listarExistencias({busqueda, pagina})`, `verificarConsistencia()` |
+| 4 | `inventario` (hecha) | `registrarMovimiento(entrada)`, `listarExistencias`, `obtenerExistencia`, `verificarConsistencia()`, `alCambiarInventario` (sección 2.6) |
 | 5 | `compras` | `registrarCompra({fechaCompra, lineas[], nota, claveIdempotencia})`, `listar`, `obtener` |
 | 6 | `salidas`, `consumos` | `registrarSalida`, `registrarConsumo`, `listar` |
 | 7 | `movimientos` | `listar({productoId, desde, hasta, tipo, subtipo, pagina})`, `obtener(id)`, `consolidado({desde, hasta})` |
@@ -137,10 +171,11 @@ _(Las versiones 2 y 3 ya están en las secciones 2.2 y 2.3; ver la V3 completa e
 Toda compra, ingreso, salida, consumo, ajuste y anulación pasa por esta operación. Ninguna
 otra operación modifica existencias.
 
-**Entrada:** `{ productoId, tipo: 'ingreso'|'salida'|'ajuste', subtipo, cantidad, unidadId, referenciaTipo, referenciaId, nota, claveIdempotencia }`
+**Entrada:** `{ productoId, tipo: 'ingreso'|'salida'|'ajuste', subtipo, cantidad, unidadId | presentacionId, sentido (solo ajustes), referenciaTipo, referenciaId, nota, claveIdempotencia }`
+(Detalle de la V4 en la sección 2.6.)
 
 **Debe ejecutar todo en una sola transacción:**
-1. Validar producto existente y activo.
+1. Validar producto existente, activo y completo (con unidad base).
 2. Convertir la cantidad a la unidad base (error si no hay conversión configurada).
 3. Si es salida: verificar existencia suficiente; si no alcanza, **rechazar sin cambiar nada** (`VALIDACION` con la cantidad disponible).
 4. Insertar el movimiento (con cantidad original, unidad original, factor aplicado, cantidad base, usuario y hora del servidor).
