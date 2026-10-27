@@ -59,6 +59,22 @@
  *         // UNIDAD_INCOMPATIBLE, VALIDACION, NO_ENCONTRADO. NUNCA asume una equivalencia.
  *   }
  *
+ *   inventario: {                  // Versión 4. Todas exigen sesión (SIN_SESION). ÚNICA vía para cambiar existencias.
+ *     registrarMovimiento({ productoId, tipo, subtipo, cantidad, unidadId | presentacionId, sentido?, referenciaTipo?, referenciaId?, nota?, claveIdempotencia })
+ *         -> Promise<{ movimiento, existencia, repetido }>
+ *         // UNA sola transacción: valida producto (existente, activo, completo) -> convierte a la unidad base (datos.conversiones.convertir)
+ *         // -> si resta, verifica existencia suficiente -> inserta el movimiento -> actualiza la existencia. Si algo falla, no queda nada.
+ *         // Idempotente: la misma claveIdempotencia devuelve el movimiento original (repetido: true). Fecha, hora y usuario los fija la capa de datos.
+ *         // Errores: VALIDACION (con campos; una salida mayor a la existencia lleva campos.cantidad y `disponible`), NO_ENCONTRADO,
+ *         // CONVERSION_NO_CONFIGURADA, UNIDAD_INCOMPATIBLE, OPERACION_DUPLICADA (clave reutilizada con otra operación)
+ *     listarExistencias({ busqueda, estado, pagina, tamanoPagina })
+ *         -> Promise<{ items: [{ productoId, nombre, activo, unidadBase: {id, nombre, abreviatura}, cantidadBase, actualizadoEn, sinExistencia }],
+ *                      total, pagina, tamanoPagina, totalPaginas, incompletos }>   // solo productos COMPLETOS; `incompletos` = los que no aparecen
+ *     obtenerExistencia(productoId) -> Promise<{ productoId, cantidadBase, unidadBase, actualizadoEn, sinExistencia }>   // NO_ENCONTRADO
+ *     verificarConsistencia()       -> Promise<{ consistente, productosRevisados, movimientosRevisados, discrepancias[] }>
+ *     alCambiarInventario(callback) -> () => void   // tiempo real: callback({ productoId, movimientoId }) tras cada movimiento aceptado
+ *   }                                 // No existe editar ni eliminar movimientos: son inmutables. Se corrigen con movimientos nuevos (V12).
+ *
  * Usuario:  { id: string, correo: string, nombre: string }
  * Producto: { id, nombre, nombreNormalizado, activo, unidadBaseId (obligatoria desde la V3; null = INCOMPLETO),
  *             creadoEn, actualizadoEn (ISO), creadoPor (id del usuario) }
@@ -71,6 +87,9 @@
  * Reglas de las presentaciones (nombre único por producto, cantidad > 0): ver presentaciones.js
  * Conversion: { id, productoId (null = general), unidadOrigenId, unidadDestinoId, factor (1 origen = factor destino), vigente,
  *               sugerida, reemplazaId, reemplazadaPorId, creadoEn, creadoPor }.  Reglas y función de cálculo: conversiones.js
+ * Movimiento: { id, productoId, tipo, subtipo, sentido (1 | -1), cantidadOriginal, unidadOriginalId, presentacionOriginalId (o null),
+ *               factorAplicado, conversionId (o null), redondeado, cantidadBase, unidadBaseId, fechaHora (ISO, del servidor),
+ *               usuarioId, claveIdempotencia, referenciaTipo, referenciaId, nota }.  Reglas puras: inventario.js
  *
  * Las versiones siguientes AGREGAN secciones al adaptador (productos, unidades,
  * movimientos, ...) sin cambiar las existentes. Ver docs/CONTRATO_DATOS.md.
@@ -82,6 +101,7 @@ const SECCIONES_REQUERIDAS = {
   unidades: ['crearUnidad', 'editarUnidad', 'obtenerUnidad', 'listarUnidades', 'cambiarEstadoUnidad'],
   conversiones: ['crearConversion', 'cambiarFactorConversion', 'retirarConversion', 'obtenerConversion', 'listarConversiones', 'convertir'],
   presentaciones: ['crearPresentacion', 'editarPresentacion', 'obtenerPresentacion', 'listarPresentaciones', 'cambiarEstadoPresentacion'],
+  inventario: ['registrarMovimiento', 'listarExistencias', 'obtenerExistencia', 'verificarConsistencia', 'alCambiarInventario'],
 };
 
 export function validarAdaptador(adaptador) {

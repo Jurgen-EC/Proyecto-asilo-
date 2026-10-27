@@ -1,11 +1,14 @@
 // PRUEBAS DE CONTRATO REUTILIZABLES
 // Cualquier adaptador (demo o de la base real) debe pasar estas pruebas.
-// Uso: ejecutarPruebasDeContrato('mi adaptador', () => crearAdaptador(), { correo, clave });
+// Uso: ejecutarPruebasDeContrato('mi adaptador', () => crearAdaptador(), { correo, clave }, extras);
+//   extras (opcional): { crearConFalloSimulado: () => ({ adaptador, provocarFallo(), restaurar() }) }
+//   Permite probar la ATOMICIDAD de registrarMovimiento: provocarFallo() hace que la próxima operación falle
+//   a mitad de camino (después de insertar el movimiento, antes de confirmar). Cada adaptador sabe cómo simularlo.
 import { describe, it, expect } from 'vitest';
 import { validarAdaptador } from './contrato.js';
 import { ErrorDatos } from './errores.js';
 
-export function ejecutarPruebasDeContrato(nombre, crearAdaptador, credenciales) {
+export function ejecutarPruebasDeContrato(nombre, crearAdaptador, credenciales, extras = {}) {
   describe(`Contrato de datos: ${nombre}`, () => {
     it('cumple la forma del contrato', () => {
       expect(() => validarAdaptador(crearAdaptador())).not.toThrow();
@@ -779,6 +782,357 @@ export function ejecutarPruebasDeContrato(nombre, crearAdaptador, credenciales) 
         await expect(a.unidades.editarUnidad(un.kg.id, { nombre: 'Kilogramo', abreviatura: 'kg', dimension: 'volumen' }))
           .rejects.toMatchObject({ campos: { dimension: expect.stringMatching(/ya se usa/i) } });
       });
+    });
+    describe('inventario: movimientos y existencias (Versión 4)', () => {
+      async function preparar() {
+        const a = crearAdaptador();
+        const usuario = await a.autenticacion.iniciarSesion(credenciales.correo, credenciales.clave);
+        const unidades = await a.unidades.listarUnidades();
+        const por = Object.fromEntries(unidades.map((u) => [u.abreviatura, u]));
+        const papa = await a.productos.crearProducto({ nombre: 'Papa', unidadBaseId: por.kg.id });
+        let contador = 0;
+        const clave = () => `clave-${++contador}-${Math.random().toString(36).slice(2, 10)}`;
+        const mover = (productoId, tipo, cantidad, extra = {}) => a.inventario.registrarMovimiento({
+          productoId, tipo, subtipo: tipo === 'ingreso' ? 'compra' : 'salida_general', cantidad, unidadId: por.kg.id,
+          claveIdempotencia: clave(), ...extra,
+        });
+        const existencia = async (productoId = papa.id) => (await a.inventario.obtenerExistencia(productoId)).cantidadBase;
+        return { a, i: a.inventario, usuario, por, papa, clave, mover, existencia };
+      }
+
+      it('exige sesión en todas las operaciones', async () => {
+        const a = crearAdaptador();
+        const llamadas = [
+          () => a.inventario.registrarMovimiento({ productoId: 'x', tipo: 'ingreso', subtipo: 'compra', cantidad: 1, unidadId: 'u', claveIdempotencia: 'k' }),
+          () => a.inventario.listarExistencias(),
+          () => a.inventario.obtenerExistencia('x'),
+          () => a.inventario.verificarConsistencia(),
+        ];
+        for (const llamar of llamadas) await expect(llamar()).rejects.toMatchObject({ codigo: 'SIN_SESION' });
+      });
+
+      it('los movimientos son inmutables: no hay operaciones para editarlos, borrarlos ni fijar existencias a mano', async () => {
+        const { i } = await preparar();
+        for (const nombreOperacion of [
+          'editarMovimiento', 'modificarMovimiento', 'actualizarMovimiento', 'eliminarMovimiento', 'borrarMovimiento',
+          'actualizarExistencia', 'establecerExistencia', 'modificarExistencia',
+        ]) expect(i[nombreOperacion]).toBeUndefined();
+      });
+
+      it('ingreso de 10: existencia 10; salida de 6: existencia 4', async () => {
+        const { i, papa, mover, existencia } = await preparar();
+        expect(await existencia()).toBe('0'); // sin movimientos, la existencia es 0
+        const ingreso = await mover(papa.id, 'ingreso', 10);
+        expect(ingreso.existencia.cantidadBase).toBe('10');
+        expect(await existencia()).toBe('10');
+        const salida = await mover(papa.id, 'salida', 6);
+        expect(salida.existencia.cantidadBase).toBe('4');
+        expect(await existencia()).toBe('4');
+        expect((await i.verificarConsistencia()).consistente).toBe(true);
+      });
+
+      it('el movimiento guarda tipo, subtipo, sentido, cantidades, unidades, usuario y la hora del SERVIDOR', async () => {
+        const { papa, por, usuario, mover } = await preparar();
+        const { movimiento: m, repetido } = await mover(papa.id, 'ingreso', '2,5', {
+          nota: '  Compra del lunes  ', referenciaTipo: 'compra', referenciaId: 'c-1',
+          fechaHora: '2000-01-01T00:00:00.000Z', usuarioId: 'otro-usuario', // la entrada NO puede fijar la hora ni el usuario
+        });
+        expect(repetido).toBe(false);
+        expect(m).toMatchObject({
+          id: expect.any(String), productoId: papa.id, tipo: 'ingreso', subtipo: 'compra', sentido: 1,
+          cantidadOriginal: '2.5', unidadOriginalId: por.kg.id, presentacionOriginalId: null,
+          factorAplicado: '1', conversionId: null, redondeado: false,
+          cantidadBase: '2.5', unidadBaseId: por.kg.id, usuarioId: usuario.id,
+          claveIdempotencia: expect.any(String), referenciaTipo: 'compra', referenciaId: 'c-1', nota: 'Compra del lunes',
+        });
+        expect(Math.abs(Date.now() - Date.parse(m.fechaHora))).toBeLessThan(60_000);
+        const salida = await mover(papa.id, 'salida', 1);
+        expect(salida.movimiento).toMatchObject({ tipo: 'salida', subtipo: 'salida_general', sentido: -1, cantidadBase: '1' });
+      });
+
+      it('una salida mayor a la existencia se rechaza, informa lo disponible y no cambia nada ni crea movimiento', async () => {
+        const { i, papa, mover, existencia } = await preparar();
+        await mover(papa.id, 'ingreso', 10);
+        await mover(papa.id, 'salida', 6);
+        const antes = await i.verificarConsistencia();
+        const rechazo = await mover(papa.id, 'salida', 5).catch((e) => e);
+        expect(rechazo).toMatchObject({ codigo: 'VALIDACION', campos: { cantidad: expect.stringMatching(/No hay cantidad suficiente.*Disponible: 4 kg/) }, disponible: '4' });
+        expect(await existencia()).toBe('4');
+        const despues = await i.verificarConsistencia();
+        expect(despues.movimientosRevisados).toBe(antes.movimientosRevisados);
+        expect(despues.consistente).toBe(true);
+      });
+
+      it('una salida rechazada nunca se convierte en ajuste, ingreso ni compra; sin existencia tampoco se puede sacar nada', async () => {
+        const { i, papa, mover, existencia } = await preparar();
+        await expect(mover(papa.id, 'salida', 1)).rejects.toMatchObject({ codigo: 'VALIDACION' });
+        await expect(mover(papa.id, 'salida', 1, { subtipo: 'consumo' })).rejects.toMatchObject({ codigo: 'VALIDACION' });
+        expect(await existencia()).toBe('0');
+        expect((await i.verificarConsistencia()).movimientosRevisados).toBe(0);
+      });
+
+      it('se puede sacar justo toda la existencia (queda 0) pero nunca una cantidad negativa', async () => {
+        const { papa, mover, existencia } = await preparar();
+        await mover(papa.id, 'ingreso', '2.5');
+        await mover(papa.id, 'salida', '2.5');
+        expect(await existencia()).toBe('0');
+        await expect(mover(papa.id, 'salida', '0.0001')).rejects.toMatchObject({ codigo: 'VALIDACION' });
+        expect(await existencia()).toBe('0');
+      });
+
+      it('idempotencia: la misma clave dos veces crea un solo movimiento y aplica la existencia una sola vez', async () => {
+        const { i, papa, mover, existencia, clave } = await preparar();
+        const k = clave();
+        const primero = await mover(papa.id, 'ingreso', 10, { claveIdempotencia: k });
+        const segundo = await mover(papa.id, 'ingreso', 10, { claveIdempotencia: k });
+        expect(segundo.repetido).toBe(true);
+        expect(segundo.movimiento).toEqual(primero.movimiento);
+        expect(await existencia()).toBe('10');
+        const c = await i.verificarConsistencia();
+        expect(c.movimientosRevisados).toBe(1);
+        expect(c.consistente).toBe(true);
+      });
+
+      it('idempotencia: un reintento devuelve el resultado original aunque ahora ya no alcance la existencia', async () => {
+        const { papa, mover, existencia, clave } = await preparar();
+        await mover(papa.id, 'ingreso', 10);
+        const k = clave();
+        const original = await mover(papa.id, 'salida', 6, { claveIdempotencia: k });
+        const reintento = await mover(papa.id, 'salida', 6, { claveIdempotencia: k });
+        expect(reintento.repetido).toBe(true);
+        expect(reintento.movimiento.id).toBe(original.movimiento.id);
+        expect(await existencia()).toBe('4'); // no se restó otra vez
+      });
+
+      it('la misma clave para una operación DISTINTA se rechaza (OPERACION_DUPLICADA) sin registrar nada', async () => {
+        const { i, papa, mover, existencia, clave } = await preparar();
+        const k = clave();
+        await mover(papa.id, 'ingreso', 10, { claveIdempotencia: k });
+        await expect(mover(papa.id, 'ingreso', 3, { claveIdempotencia: k })).rejects.toMatchObject({ codigo: 'OPERACION_DUPLICADA' });
+        expect(await existencia()).toBe('10');
+        expect((await i.verificarConsistencia()).movimientosRevisados).toBe(1);
+      });
+
+      it('dos salidas simultáneas de 3 con existencia 5: solo una se acepta', async () => {
+        const { i, papa, mover, existencia } = await preparar();
+        await mover(papa.id, 'ingreso', 5);
+        const resultados = await Promise.allSettled([mover(papa.id, 'salida', 3), mover(papa.id, 'salida', 3)]);
+        expect(resultados.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+        const rechazada = resultados.find((r) => r.status === 'rejected');
+        expect(rechazada.reason).toMatchObject({ codigo: 'VALIDACION', disponible: '2' });
+        expect(await existencia()).toBe('2');
+        expect((await i.verificarConsistencia()).consistente).toBe(true);
+      });
+
+      it('dos conexiones distintas con salidas simultáneas de 3 sobre existencia 5: solo una se acepta', async () => {
+        const { a, papa, mover, existencia, por, clave } = await preparar();
+        await mover(papa.id, 'ingreso', 5);
+        const b = crearAdaptador(); // segunda conexión al mismo almacén de datos
+        await b.autenticacion.iniciarSesion(credenciales.correo, credenciales.clave);
+        const salida = (adaptador) => adaptador.inventario.registrarMovimiento({
+          productoId: papa.id, tipo: 'salida', subtipo: 'salida_general', cantidad: 3, unidadId: por.kg.id, claveIdempotencia: clave(),
+        });
+        const resultados = await Promise.allSettled([salida(a), salida(b)]);
+        expect(resultados.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+        expect(await existencia()).toBe('2');
+      });
+
+      it('muchas salidas simultáneas nunca dejan la existencia negativa', async () => {
+        const { i, papa, mover, existencia } = await preparar();
+        await mover(papa.id, 'ingreso', 5);
+        const resultados = await Promise.allSettled(Array.from({ length: 12 }, () => mover(papa.id, 'salida', 1)));
+        expect(resultados.filter((r) => r.status === 'fulfilled')).toHaveLength(5);
+        expect(await existencia()).toBe('0');
+        expect((await i.verificarConsistencia()).consistente).toBe(true);
+      });
+
+      it('convierte a la unidad base y guarda lo usado: 1500 g de un producto en kg son 1,5 kg', async () => {
+        const { i, papa, por, mover, existencia } = await preparar();
+        const { movimiento: m } = await mover(papa.id, 'ingreso', 1500, { unidadId: por.g.id });
+        expect(m).toMatchObject({
+          cantidadOriginal: '1500', unidadOriginalId: por.g.id, cantidadBase: '1.5', unidadBaseId: por.kg.id,
+          factorAplicado: '0.001', conversionId: expect.any(String), redondeado: false,
+        });
+        expect(await existencia()).toBe('1.5');
+        expect((await i.verificarConsistencia()).consistente).toBe(true);
+      });
+
+      it('con una presentación: 3 cajas de 12 unidades son 36 unidades', async () => {
+        const { a, por } = await preparar();
+        const galletas = await a.productos.crearProducto({ nombre: 'Galletas', unidadBaseId: por.u.id });
+        const caja = await a.presentaciones.crearPresentacion(galletas.id, { nombre: 'Caja', unidadId: por.u.id, cantidadContenida: '12' });
+        const r = await a.inventario.registrarMovimiento({
+          productoId: galletas.id, tipo: 'ingreso', subtipo: 'compra', cantidad: 3, presentacionId: caja.id, claveIdempotencia: 'caja-1',
+        });
+        expect(r.movimiento).toMatchObject({
+          cantidadOriginal: '3', presentacionOriginalId: caja.id, unidadOriginalId: por.u.id,
+          factorAplicado: '12', cantidadBase: '36', unidadBaseId: por.u.id,
+        });
+        expect(r.existencia.cantidadBase).toBe('36');
+      });
+
+      it('sin equivalencia configurada nunca se asume una: se rechaza y no se registra nada', async () => {
+        const { a, i, papa, por, mover } = await preparar();
+        const libra = await a.unidades.crearUnidad({ nombre: 'Libra', abreviatura: 'lb', dimension: 'masa' });
+        await expect(mover(papa.id, 'ingreso', 2, { unidadId: libra.id })).rejects.toMatchObject({ codigo: 'CONVERSION_NO_CONFIGURADA' });
+        await expect(mover(papa.id, 'ingreso', 2, { unidadId: por.l.id })).rejects.toMatchObject({ codigo: 'UNIDAD_INCOMPATIBLE' });
+        expect((await i.verificarConsistencia()).movimientosRevisados).toBe(0);
+        expect((await i.obtenerExistencia(papa.id)).cantidadBase).toBe('0');
+      });
+
+      it('cambiar después una equivalencia no reescribe lo ya registrado', async () => {
+        const { a, papa, por, mover, existencia, clave } = await preparar();
+        const k = clave();
+        const antes = await mover(papa.id, 'ingreso', 1000, { unidadId: por.g.id, claveIdempotencia: k });
+        const [general] = (await a.conversiones.listarConversiones()).filter((c) => c.unidadOrigenId === por.kg.id && c.unidadDestinoId === por.g.id);
+        await a.conversiones.cambiarFactorConversion(general.id, '500'); // 1 kg = 500 g (versión nueva)
+        const despues = await mover(papa.id, 'ingreso', 1000, { unidadId: por.g.id });
+        expect(despues.movimiento.cantidadBase).toBe('2');
+        expect(despues.movimiento.conversionId).not.toBe(antes.movimiento.conversionId);
+        const original = await mover(papa.id, 'ingreso', 1000, { unidadId: por.g.id, claveIdempotencia: k });
+        expect(original.movimiento).toMatchObject({ cantidadBase: '1', factorAplicado: '0.001', conversionId: antes.movimiento.conversionId });
+        expect(await existencia()).toBe('3');
+      });
+
+      it('una cantidad que queda en cero al convertir se rechaza', async () => {
+        const { i, papa, mover } = await preparar();
+        await expect(mover(papa.id, 'ingreso', '0.00001')).rejects.toMatchObject({ codigo: 'VALIDACION', campos: { cantidad: expect.any(String) } });
+        expect((await i.verificarConsistencia()).movimientosRevisados).toBe(0);
+      });
+
+      it('un producto inexistente o inactivo no puede tener movimientos', async () => {
+        const { a, i, papa, mover } = await preparar();
+        await expect(mover('no-existe', 'ingreso', 1)).rejects.toMatchObject({ codigo: 'NO_ENCONTRADO' });
+        await a.productos.cambiarEstadoProducto(papa.id, false);
+        await expect(mover(papa.id, 'ingreso', 1)).rejects.toMatchObject({ codigo: 'VALIDACION', campos: { productoId: expect.any(String) } });
+        expect((await i.verificarConsistencia()).movimientosRevisados).toBe(0);
+      });
+
+      it('valida la entrada y avisa todos los campos con problema a la vez, sin registrar nada', async () => {
+        const { i, papa, por, mover } = await preparar();
+        const casos = [
+          [{ tipo: 'otro' }, 'tipo'],
+          [{ tipo: 'ingreso', subtipo: 'consumo' }, 'subtipo'],
+          [{ cantidad: '' }, 'cantidad'], [{ cantidad: 0 }, 'cantidad'], [{ cantidad: '-3' }, 'cantidad'], [{ cantidad: 'abc' }, 'cantidad'],
+          [{ unidadId: undefined }, 'unidadId'], [{ unidadId: por.kg.id, presentacionId: 'p-1' }, 'unidadId'],
+          [{ claveIdempotencia: '' }, 'claveIdempotencia'], [{ claveIdempotencia: 'x'.repeat(101) }, 'claveIdempotencia'],
+          [{ nota: 'x'.repeat(501) }, 'nota'], [{ referenciaTipo: 'compra' }, 'referenciaId'],
+        ];
+        for (const [cambio, campo] of casos) {
+          await expect(mover(papa.id, 'ingreso', 1, cambio)).rejects.toMatchObject({ codigo: 'VALIDACION', campos: { [campo]: expect.any(String) } });
+        }
+        const varios = await i.registrarMovimiento({}).catch((e) => e);
+        expect(Object.keys(varios.campos)).toEqual(expect.arrayContaining(['productoId', 'tipo', 'cantidad', 'unidadId', 'claveIdempotencia']));
+        expect((await i.verificarConsistencia()).movimientosRevisados).toBe(0);
+      });
+
+      it('un ajuste debe indicar si suma o resta, y tampoco puede dejar la existencia en negativo', async () => {
+        const { i, papa, mover, existencia } = await preparar();
+        const ajuste = (cantidad, extra) => mover(papa.id, 'ajuste', cantidad, { subtipo: 'ajuste_conteo', ...extra });
+        await expect(ajuste(1)).rejects.toMatchObject({ codigo: 'VALIDACION', campos: { sentido: expect.any(String) } });
+        await ajuste(4, { sentido: 1 });
+        expect(await existencia()).toBe('4');
+        await ajuste(1, { sentido: -1 });
+        expect(await existencia()).toBe('3');
+        await expect(ajuste(9, { sentido: -1 })).rejects.toMatchObject({ codigo: 'VALIDACION', disponible: '3' });
+        expect(await existencia()).toBe('3');
+        expect((await i.verificarConsistencia()).consistente).toBe(true);
+      });
+
+      it('listarExistencias: solo productos completos, por nombre, con unidad base, "sin existencia", búsqueda y paginación', async () => {
+        const { a, i, papa, por, mover } = await preparar();
+        const arroz = await a.productos.crearProducto({ nombre: 'Arroz', unidadBaseId: por.kg.id });
+        const aceite = await a.productos.crearProducto({ nombre: 'Aceite', unidadBaseId: por.l.id });
+        await mover(papa.id, 'ingreso', 4);
+        await mover(aceite.id, 'ingreso', '2.5', { unidadId: por.l.id });
+        const lista = await i.listarExistencias();
+        expect(lista.items.map((x) => x.nombre)).toEqual(['Aceite', 'Arroz', 'Papa']);
+        expect(lista).toMatchObject({ total: 3, pagina: 1, totalPaginas: 1, incompletos: 0 });
+        expect(lista.items[0]).toMatchObject({ productoId: aceite.id, cantidadBase: '2.5', sinExistencia: false, unidadBase: { abreviatura: 'l' }, actualizadoEn: expect.any(String) });
+        expect(lista.items[1]).toMatchObject({ productoId: arroz.id, cantidadBase: '0', sinExistencia: true, actualizadoEn: null });
+        expect((await i.listarExistencias({ busqueda: 'PAPÁ' })).items.map((x) => x.nombre)).toEqual(['Papa']);
+        const pagina = await i.listarExistencias({ pagina: 2, tamanoPagina: 2 });
+        expect(pagina).toMatchObject({ total: 3, pagina: 2, totalPaginas: 2 });
+        expect(pagina.items.map((x) => x.nombre)).toEqual(['Papa']);
+        await a.productos.cambiarEstadoProducto(arroz.id, false);
+        expect((await i.listarExistencias()).items.map((x) => x.nombre)).toEqual(['Aceite', 'Papa']);
+        expect((await i.listarExistencias({ estado: 'inactivos' })).items.map((x) => x.nombre)).toEqual(['Arroz']);
+        expect((await i.listarExistencias({ estado: 'todos' })).total).toBe(3);
+      });
+
+      it('obtenerExistencia de un producto inexistente lanza NO_ENCONTRADO', async () => {
+        const { i } = await preparar();
+        await expect(i.obtenerExistencia('no-existe')).rejects.toMatchObject({ codigo: 'NO_ENCONTRADO' });
+      });
+
+      it('alCambiarInventario avisa tras cada movimiento ACEPTADO (no tras uno rechazado) y permite desuscribirse', async () => {
+        const { i, papa, mover } = await preparar();
+        const avisos = [];
+        const salir = i.alCambiarInventario((cambio) => avisos.push(cambio));
+        const ingreso = await mover(papa.id, 'ingreso', 5);
+        await expect(mover(papa.id, 'salida', 9)).rejects.toBeDefined();
+        expect(avisos).toEqual([{ productoId: papa.id, movimientoId: ingreso.movimiento.id }]);
+        salir();
+        await mover(papa.id, 'ingreso', 1);
+        expect(avisos).toHaveLength(1);
+      });
+
+      it('verificarConsistencia devuelve consistente tras una secuencia de operaciones', async () => {
+        const { i, papa, por, mover } = await preparar();
+        expect(await i.verificarConsistencia()).toEqual({ consistente: true, productosRevisados: 0, movimientosRevisados: 0, discrepancias: [] });
+        await mover(papa.id, 'ingreso', 10);
+        await mover(papa.id, 'salida', 3, { unidadId: por.kg.id });
+        await mover(papa.id, 'ingreso', 500, { unidadId: por.g.id });
+        await expect(mover(papa.id, 'salida', 50)).rejects.toBeDefined();
+        expect(await i.verificarConsistencia()).toEqual({ consistente: true, productosRevisados: 1, movimientosRevisados: 3, discrepancias: [] });
+      });
+
+      it('con movimientos registrados, la unidad base del producto ya no se puede cambiar', async () => {
+        const { a, papa, por, mover } = await preparar();
+        const sinMovimientos = await a.productos.crearProducto({ nombre: 'Yuca', unidadBaseId: por.kg.id });
+        expect((await a.productos.editarProducto(sinMovimientos.id, { nombre: 'Yuca', unidadBaseId: por.g.id })).unidadBaseId).toBe(por.g.id);
+        await mover(papa.id, 'ingreso', 2);
+        await expect(a.productos.editarProducto(papa.id, { nombre: 'Papa', unidadBaseId: por.g.id })).rejects.toMatchObject({
+          codigo: 'VALIDACION', campos: { unidadBaseId: expect.stringMatching(/ya tiene movimientos/) },
+        });
+        // la misma unidad, o editar solo el nombre, sí se puede
+        expect((await a.productos.editarProducto(papa.id, { nombre: 'Papa criolla', unidadBaseId: por.kg.id })).nombre).toBe('Papa criolla');
+        expect((await a.productos.editarProducto(papa.id, { nombre: 'Papa' })).unidadBaseId).toBe(por.kg.id);
+      });
+
+      it('lo que devuelve el adaptador son copias: modificarlas no altera lo guardado', async () => {
+        const { i, papa, mover, existencia } = await preparar();
+        const r = await mover(papa.id, 'ingreso', 10);
+        r.movimiento.cantidadBase = '999';
+        r.existencia.cantidadBase = '999';
+        expect(await existencia()).toBe('10');
+        expect((await i.verificarConsistencia()).consistente).toBe(true);
+      });
+
+      if (extras.crearConFalloSimulado) {
+        it('atomicidad: un fallo a mitad de la operación no deja movimiento ni cambio de existencia', async () => {
+          const { adaptador: a, provocarFallo, restaurar } = extras.crearConFalloSimulado();
+          await a.autenticacion.iniciarSesion(credenciales.correo, credenciales.clave);
+          const kg = (await a.unidades.listarUnidades()).find((u) => u.abreviatura === 'kg');
+          const papa = await a.productos.crearProducto({ nombre: 'Papa', unidadBaseId: kg.id });
+          const entrada = (tipo, cantidad, claveIdempotencia) => ({
+            productoId: papa.id, tipo, subtipo: tipo === 'ingreso' ? 'compra' : 'salida_general', cantidad, unidadId: kg.id, claveIdempotencia,
+          });
+          await a.inventario.registrarMovimiento(entrada('ingreso', 10, 'a-1'));
+
+          provocarFallo();
+          await expect(a.inventario.registrarMovimiento(entrada('salida', 3, 'a-2'))).rejects.toBeInstanceOf(ErrorDatos);
+          restaurar();
+
+          expect((await a.inventario.obtenerExistencia(papa.id)).cantidadBase).toBe('10');
+          expect(await a.inventario.verificarConsistencia()).toMatchObject({ consistente: true, movimientosRevisados: 1 });
+          // el intento fallido no cuenta como registrado: reintentar con la misma clave lo ejecuta de verdad
+          const reintento = await a.inventario.registrarMovimiento(entrada('salida', 3, 'a-2'));
+          expect(reintento.repetido).toBe(false);
+          expect((await a.inventario.obtenerExistencia(papa.id)).cantidadBase).toBe('7');
+          expect(await a.inventario.verificarConsistencia()).toMatchObject({ consistente: true, movimientosRevisados: 2 });
+        });
+      }
     });
   });
 }
