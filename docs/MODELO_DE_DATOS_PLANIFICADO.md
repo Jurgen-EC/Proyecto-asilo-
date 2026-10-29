@@ -31,8 +31,10 @@ Todas las tablas incluyen `creado_en` y, cuando aplica, `creado_por` y `actualiz
   contradice la inmutabilidad (habría que modificar el movimiento original). La V12 resuelve las anulaciones con un movimiento nuevo (`subtipo = anulacion`) que referencia al original (`referencia_tipo`, `referencia_id`).
 
 ## Versión 5 — compras
-- **compras:** id, fecha_compra (no futura), registrada_en, usuario_id, nota, total decimal(14,2).
-- **compra_lineas:** id, compra_id, producto_id, presentacion_id (opcional), cantidad, unidad_id, costo_unitario decimal(14,2), costo_total decimal(14,2), movimiento_id.
+**Construida en la V5** (ver `ESTADO_V5.md` para el detalle de campos).
+- **compras:** id, fecha_compra (fecha de calendario, no futura), registrada_en (servidor), usuario_id, nota (opcional), total decimal(14,2), clave_idempotencia (única). Inmutable.
+- **compra_lineas:** id, compra_id, producto_id, presentacion_id (opcional), cantidad decimal(14,4) > 0 (con presentación, número de presentaciones), unidad_id, costo_unitario decimal(14,2) > 0, costo_total decimal(14,2) > 0, movimiento_id (único).
+- Cada línea genera exactamente un movimiento (`ingreso` / `compra`, `referencia_tipo = 'compra'`, `referencia_id` = compra) con clave `<clave de la compra>:<n>`. Compra, líneas, movimientos y existencias se confirman en **una** transacción.
 
 ## Versión 6 — salidas y consumos
 - **salidas:** id, movimiento_id, motivo, nota.
