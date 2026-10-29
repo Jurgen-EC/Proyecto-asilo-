@@ -175,3 +175,9 @@ a:focus-visible, select:focus-visible, button:focus-visible, .tarjeta--enlace:fo
 .formulario-linea .boton { align-self: flex-end; }
 .formulario-linea .selector { flex: 1 1 260px; }
 
+
+/* ---- Compras (Versión 5) ---- */
+.tabla__numero { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tabla tfoot th, .tabla tfoot td { border-top: 2px solid var(--borde); border-bottom: 0; }
+.tabla tfoot th { text-align: right; }
+.tabla small { font-weight: 400; }
