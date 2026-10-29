@@ -1,7 +1,7 @@
 {
   "name": "inventario-cocina-hogar",
   "private": true,
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Sistema de inventario, costos y gestión de insumos de cocina - Hogar de Ancianos Jafeth Jiménez Morales (TCU-797)",
   "type": "module",
   "scripts": {

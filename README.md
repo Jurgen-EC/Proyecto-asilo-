@@ -1,9 +1,10 @@
 # Inventario de Cocina — Hogar de Ancianos Jafeth Jiménez Morales (TCU-797)
 
 Sistema web (React) para el inventario, costos y gestión de insumos de cocina.
-Este repositorio contiene hasta la **Versión 3**: base del proyecto, catálogo de productos (V2) y
-unidades de medida, presentaciones y conversiones (V3), con inicio de sesión de demostración,
-navegación en español y capa de datos preparada para conectar la base de datos real cuando se defina.
+Este repositorio contiene hasta la **Versión 5**: base del proyecto, catálogo de productos (V2),
+unidades de medida, presentaciones y conversiones (V3), existencias y movimientos (V4) y compras
+e ingresos (V5), con inicio de sesión de demostración, navegación en español y capa de datos
+preparada para conectar la base de datos real cuando se defina.
 
 > **Estado de la base de datos: NO DEFINIDA.** La aplicación corre con un adaptador
 > de demostración. No se guarda información real. Ver `docs/decisiones/ADR-001-base-de-datos.md`.
@@ -28,17 +29,19 @@ src/
     autenticacion/    Contexto de sesión y ruta protegida
     modulos.js        Catálogo de módulos (Próximamente / disponible)
     datos/conversiones.js   Reglas de conversión y función convertir (V3)
+    datos/inventario.js     Reglas de movimientos y existencias, registrarMovimiento (V4)
+    datos/compras.js        Reglas de compras: costos, fecha, idempotencia, errores por línea (V5)
   compartido/
     componentes/      Layout, notificaciones, diálogo de confirmación, carga, estado vacío, límite de error
     utilidades/       Decimales exactos y formato de fechas/dinero (hora de Costa Rica)
-  modulos/            Un directorio por módulo (inicio, autenticación; luego productos, compras...)
+  modulos/            Un directorio por módulo (inicio, autenticación, productos, unidades, inventario, compras...)
   pruebas/            Pruebas automáticas
 docs/
   CONTRATO_DATOS.md                    Qué debe cumplir cualquier base de datos/adaptador (secciones por versión)
   MODELO_DE_DATOS_PLANIFICADO.md       Tablas y campos previstos por versión
   GUIA_CONEXION_BASE_DE_DATOS.md       Pasos para conectar la base real
   decisiones/ADR-001-base-de-datos.md  Decisión de base de datos (PENDIENTE)
-  ESTADO_V1.md, ESTADO_V2.md, ESTADO_V3.md   Bloque de estado de cada versión
+  ESTADO_V1.md ... ESTADO_V5.md        Bloque de estado de cada versión
 ```
 
 ## Reglas del proyecto (resumen)

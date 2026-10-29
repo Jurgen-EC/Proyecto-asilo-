@@ -5,7 +5,7 @@ export const MODULOS = [
   { id: 'productos',    nombre: 'Productos',               ruta: '/productos',    version: 2,  estado: 'disponible', descripcion: 'Catálogo de productos' },
   { id: 'unidades',     nombre: 'Unidades y conversiones', ruta: '/unidades',     version: 3,  estado: 'disponible', descripcion: 'Unidades, presentaciones y equivalencias' },
   { id: 'inventario',   nombre: 'Inventario',              ruta: '/inventario',   version: 4,  estado: 'disponible', descripcion: 'Existencias actuales' },
-  { id: 'compras',      nombre: 'Compras',                 ruta: '/compras',      version: 5,  estado: 'proximamente', descripcion: 'Compras e ingresos' },
+  { id: 'compras',      nombre: 'Compras',                 ruta: '/compras',      version: 5,  estado: 'disponible', descripcion: 'Compras e ingresos' },
   { id: 'salidas',      nombre: 'Salidas y consumo',       ruta: '/salidas',      version: 6,  estado: 'proximamente', descripcion: 'Salidas y consumos de productos' },
   { id: 'movimientos',  nombre: 'Movimientos',             ruta: '/movimientos',  version: 7,  estado: 'proximamente', descripcion: 'Historial, ingresos, salidas y consolidado' },
   { id: 'costos',       nombre: 'Gastos y costos',         ruta: '/costos',       version: 8,  estado: 'proximamente', descripcion: 'Gastos y costos de adquisición' },

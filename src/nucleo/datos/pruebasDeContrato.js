@@ -7,6 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import { validarAdaptador } from './contrato.js';
 import { ErrorDatos } from './errores.js';
+import { hoyEnCostaRica } from '../../compartido/utilidades/formato.js';
 
 export function ejecutarPruebasDeContrato(nombre, crearAdaptador, credenciales, extras = {}) {
   describe(`Contrato de datos: ${nombre}`, () => {
@@ -1130,6 +1131,374 @@ export function ejecutarPruebasDeContrato(nombre, crearAdaptador, credenciales, 
           const reintento = await a.inventario.registrarMovimiento(entrada('salida', 3, 'a-2'));
           expect(reintento.repetido).toBe(false);
           expect((await a.inventario.obtenerExistencia(papa.id)).cantidadBase).toBe('7');
+          expect(await a.inventario.verificarConsistencia()).toMatchObject({ consistente: true, movimientosRevisados: 2 });
+        });
+      }
+    });
+
+    describe('compras e ingresos (Versión 5)', () => {
+      const dia = (desplazamiento) => {
+        const d = new Date(`${hoyEnCostaRica()}T12:00:00Z`);
+        d.setUTCDate(d.getUTCDate() + desplazamiento);
+        return d.toISOString().slice(0, 10);
+      };
+      const HOY = () => dia(0);
+
+      async function preparar() {
+        const a = crearAdaptador();
+        const usuario = await a.autenticacion.iniciarSesion(credenciales.correo, credenciales.clave);
+        const unidades = await a.unidades.listarUnidades();
+        const por = Object.fromEntries(unidades.map((u) => [u.abreviatura, u]));
+        const papa = await a.productos.crearProducto({ nombre: 'Papa', unidadBaseId: por.kg.id });
+        const huevos = await a.productos.crearProducto({ nombre: 'Huevos', unidadBaseId: por.u.id });
+        const aceite = await a.productos.crearProducto({ nombre: 'Aceite', unidadBaseId: por.l.id });
+        let contador = 0;
+        const clave = () => `compra-${++contador}-${Math.random().toString(36).slice(2, 10)}`;
+        const linea = (producto, cantidad, extra = {}) => ({
+          productoId: producto.id, unidadId: producto.unidadBaseId, cantidad, costoUnitario: '100', ...extra,
+        });
+        const comprar = (lineas, extra = {}) => a.compras.registrarCompra({
+          fechaCompra: HOY(), lineas, claveIdempotencia: clave(), ...extra,
+        });
+        const existencia = async (producto) => (await a.inventario.obtenerExistencia(producto.id)).cantidadBase;
+        return { a, c: a.compras, usuario, por, papa, huevos, aceite, clave, linea, comprar, existencia };
+      }
+
+      it('exige sesión en todas las operaciones', async () => {
+        const a = crearAdaptador();
+        const llamadas = [
+          () => a.compras.registrarCompra({ fechaCompra: '2026-01-01', lineas: [], claveIdempotencia: 'k' }),
+          () => a.compras.listarCompras(),
+          () => a.compras.obtenerCompra('x'),
+        ];
+        for (const llamar of llamadas) await expect(llamar()).rejects.toMatchObject({ codigo: 'SIN_SESION' });
+      });
+
+      it('una compra confirmada no se edita ni se borra: no hay operaciones para eso', async () => {
+        const { c } = await preparar();
+        for (const nombreOperacion of ['editarCompra', 'modificarCompra', 'actualizarCompra', 'eliminarCompra', 'borrarCompra']) {
+          expect(c[nombreOperacion]).toBeUndefined();
+        }
+      });
+
+      it('una compra de dos líneas crea 2 ingresos y suma ambas existencias', async () => {
+        const { a, c, usuario, papa, huevos, comprar, linea, existencia } = await preparar();
+        const { compra, repetido } = await comprar([linea(papa, '10', { costoUnitario: '800' }), linea(huevos, '30', { costoUnitario: '120' })], { nota: '  Feria del agricultor ' });
+        expect(repetido).toBe(false);
+        expect(compra).toMatchObject({
+          id: expect.any(String), fechaCompra: HOY(), usuarioId: usuario.id, nota: 'Feria del agricultor', total: '11600.00',
+        });
+        expect(Number.isNaN(Date.parse(compra.registradaEn))).toBe(false);
+        expect(compra.lineas).toHaveLength(2);
+        expect(compra.lineas[0]).toMatchObject({ productoId: papa.id, cantidad: '10', unidadId: papa.unidadBaseId, presentacionId: null, costoUnitario: '800.00', costoTotal: '8000.00' });
+        expect(compra.lineas[1]).toMatchObject({ productoId: huevos.id, cantidad: '30', costoUnitario: '120.00', costoTotal: '3600.00' });
+        expect(await existencia(papa)).toBe('10');
+        expect(await existencia(huevos)).toBe('30');
+        const detalle = await c.obtenerCompra(compra.id);
+        expect(detalle.lineas.map((l) => l.movimiento)).toEqual([
+          expect.objectContaining({ tipo: 'ingreso', subtipo: 'compra', cantidadBase: '10' }),
+          expect.objectContaining({ tipo: 'ingreso', subtipo: 'compra', cantidadBase: '30' }),
+        ]);
+        expect(await a.inventario.verificarConsistencia()).toMatchObject({ consistente: true, movimientosRevisados: 2 });
+      });
+
+      it('el total de la compra es la suma exacta de los totales de sus líneas', async () => {
+        const { papa, huevos, comprar, linea } = await preparar();
+        const { compra } = await comprar([
+          linea(papa, '3', { costoUnitario: '0,10' }), linea(huevos, '1', { costoUnitario: undefined, costoTotal: '0,20' }), linea(papa, '1', { costoUnitario: '0,01' }),
+        ]);
+        expect(compra.lineas.map((l) => l.costoTotal)).toEqual(['0.30', '0.20', '0.01']);
+        expect(compra.total).toBe('0.51'); // con flotantes 0,1×3 + 0,2 + 0,01 no daría exacto
+      });
+
+      it('la misma compra se puede repetir en el mismo producto en varias líneas y suma', async () => {
+        const { papa, comprar, linea, existencia } = await preparar();
+        await comprar([linea(papa, '2'), linea(papa, '3,5')]);
+        expect(await existencia(papa)).toBe('5.5');
+      });
+
+      it('si falla la segunda línea no se guarda nada: ni compra, ni la primera línea, ni existencias', async () => {
+        const { a, c, por, papa, huevos, comprar, linea, existencia } = await preparar();
+        const libra = await a.unidades.crearUnidad({ nombre: 'Libra', abreviatura: 'lb', dimension: 'masa' });
+        const error = await comprar([linea(papa, '10'), linea(huevos, '5', { unidadId: libra.id })]).catch((e) => e);
+        expect(error).toMatchObject({ codigo: 'UNIDAD_INCOMPATIBLE', linea: 2, campos: { 'lineas.1.unidadId': expect.any(String) } });
+        expect(error.message).toMatch(/^Línea 2: /);
+        expect(await existencia(papa)).toBe('0');
+        expect(await existencia(huevos)).toBe('0');
+        expect((await c.listarCompras()).total).toBe(0);
+        expect(await a.inventario.verificarConsistencia()).toMatchObject({ consistente: true, movimientosRevisados: 0 });
+        expect(por.kg).toBeDefined();
+      });
+
+      it('una unidad sin conversión configurada se rechaza con un mensaje claro en esa línea', async () => {
+        const { a, papa, comprar, linea } = await preparar();
+        const libra = await a.unidades.crearUnidad({ nombre: 'Libra', abreviatura: 'lb', dimension: 'masa' });
+        const error = await comprar([linea(papa, '2', { unidadId: libra.id })]).catch((e) => e);
+        expect(error).toMatchObject({ codigo: 'CONVERSION_NO_CONFIGURADA', linea: 1, campos: { 'lineas.0.unidadId': expect.stringMatching(/equivalencia/i) } });
+      });
+
+      it('un producto inactivo o inexistente se rechaza indicando la línea', async () => {
+        const { a, papa, huevos, comprar, linea, existencia } = await preparar();
+        await a.productos.cambiarEstadoProducto(huevos.id, false);
+        await expect(comprar([linea(papa, '1'), linea(huevos, '1')])).rejects.toMatchObject({
+          codigo: 'VALIDACION', linea: 2, campos: { 'lineas.1.productoId': expect.stringMatching(/inactivo/i) },
+        });
+        await expect(comprar([linea({ id: 'no-existe', unidadBaseId: papa.unidadBaseId }, '1')])).rejects.toMatchObject({
+          codigo: 'NO_ENCONTRADO', linea: 1, campos: { 'lineas.0.productoId': expect.any(String) },
+        });
+        expect(await existencia(papa)).toBe('0');
+      });
+
+      it('reenviar el mismo formulario (misma clave) no duplica la compra ni el ingreso', async () => {
+        const { c, papa, clave, linea, existencia } = await preparar();
+        const entrada = { fechaCompra: HOY(), lineas: [linea(papa, '10')], claveIdempotencia: clave() };
+        const primera = await c.registrarCompra(entrada);
+        const segunda = await c.registrarCompra(entrada);
+        expect(segunda.repetido).toBe(true);
+        expect(segunda.compra.id).toBe(primera.compra.id);
+        expect(segunda.compra.lineas[0].movimientoId).toBe(primera.compra.lineas[0].movimientoId);
+        expect(await existencia(papa)).toBe('10');
+        expect((await c.listarCompras()).total).toBe(1);
+      });
+
+      it('la misma clave con una compra distinta se rechaza (OPERACION_DUPLICADA) y no cambia nada', async () => {
+        const { c, papa, clave, linea, existencia } = await preparar();
+        const k = clave();
+        await c.registrarCompra({ fechaCompra: HOY(), lineas: [linea(papa, '10')], claveIdempotencia: k });
+        for (const otra of [
+          { lineas: [linea(papa, '11')] }, { lineas: [linea(papa, '10', { costoUnitario: '101' })] },
+          { lineas: [linea(papa, '10')], nota: 'otra' }, { lineas: [linea(papa, '10')], fechaCompra: dia(-1) },
+          { lineas: [linea(papa, '10'), linea(papa, '1')] },
+        ]) {
+          await expect(c.registrarCompra({ fechaCompra: HOY(), claveIdempotencia: k, ...otra })).rejects.toMatchObject({ codigo: 'OPERACION_DUPLICADA' });
+        }
+        expect(await existencia(papa)).toBe('10');
+        expect((await c.listarCompras()).total).toBe(1);
+      });
+
+      it('con presentación: 3 cajas de 12 unidades suman 36 unidades y la línea guarda lo usado', async () => {
+        const { a, c, huevos, por, comprar, existencia } = await preparar();
+        const caja = await a.presentaciones.crearPresentacion(huevos.id, { nombre: 'Caja', unidadId: por.u.id, cantidadContenida: '12' });
+        const { compra } = await comprar([{ productoId: huevos.id, presentacionId: caja.id, cantidad: '3', costoUnitario: '2400' }]);
+        expect(compra.lineas[0]).toMatchObject({ presentacionId: caja.id, cantidad: '3', unidadId: por.u.id, costoUnitario: '2400.00', costoTotal: '7200.00' });
+        expect(compra.total).toBe('7200.00');
+        expect(await existencia(huevos)).toBe('36');
+        // editar después el contenido de la presentación NO reescribe lo registrado
+        await a.presentaciones.editarPresentacion(caja.id, { nombre: 'Caja', unidadId: por.u.id, cantidadContenida: '18' });
+        const detalle = await c.obtenerCompra(compra.id);
+        expect(detalle.lineas[0].movimiento).toMatchObject({ cantidadBase: '36', factorAplicado: '12' });
+        expect(detalle.lineas[0].presentacion).toMatchObject({ id: caja.id, nombre: 'Caja' });
+        expect(await existencia(huevos)).toBe('36');
+      });
+
+      it('una presentación de otro producto o una unidad convertible (1,5 kg de papa en gramos) se maneja bien', async () => {
+        const { a, papa, huevos, por, comprar, existencia } = await preparar();
+        const caja = await a.presentaciones.crearPresentacion(huevos.id, { nombre: 'Caja', unidadId: por.u.id, cantidadContenida: '12' });
+        await expect(comprar([{ productoId: papa.id, presentacionId: caja.id, cantidad: '1', costoUnitario: '5' }])).rejects.toMatchObject({ codigo: 'NO_ENCONTRADO', linea: 1 });
+        await comprar([{ productoId: papa.id, unidadId: por.g.id, cantidad: '1500', costoTotal: '900' }]);
+        expect(await existencia(papa)).toBe('1.5');
+      });
+
+      it('costo total con decimales: 3,5 unidades a 1.250,75 se calcula exacto (redondeo half-up a 2 decimales, PROVISIONAL)', async () => {
+        const { huevos, comprar, linea } = await preparar();
+        const { compra } = await comprar([linea(huevos, '3,5', { costoUnitario: '1250,75' })]);
+        expect(compra.lineas[0]).toMatchObject({ costoUnitario: '1250.75', costoTotal: '4377.63' }); // 4377,625 → 4377,63
+        expect(compra.total).toBe('4377.63');
+      });
+
+      it('con el costo total escrito, el sistema calcula el unitario y conserva el total tal cual', async () => {
+        const { papa, comprar, linea } = await preparar();
+        const { compra } = await comprar([linea(papa, '3', { costoUnitario: undefined, costoTotal: '100' })]);
+        expect(compra.lineas[0]).toMatchObject({ costoUnitario: '33.33', costoTotal: '100.00' });
+        expect(compra.total).toBe('100.00');
+      });
+
+      it('exige UNO solo de los dos costos, mayor que cero y con hasta 2 decimales', async () => {
+        const { papa, comprar, linea } = await preparar();
+        const casos = [
+          [{ costoUnitario: undefined }, /costo unitario o el costo total/i],
+          [{ costoUnitario: '10', costoTotal: '30' }, /solo uno/i],
+          [{ costoUnitario: '0' }, /mayor que cero/i], [{ costoUnitario: '-5' }, /con números/i], [{ costoUnitario: 'mucho' }, /con números/i],
+          [{ costoUnitario: '1,555' }, /máximo 2 decimales/i], [{ costoUnitario: undefined, costoTotal: '0' }, /mayor que cero/i],
+          [{ costoUnitario: '0,01' , cantidad: '0,1' }, /queda en cero/i],
+        ];
+        for (const [extra, mensaje] of casos) {
+          const { cantidad, ...costos } = extra;
+          await expect(comprar([linea(papa, cantidad ?? '1', costos)])).rejects.toMatchObject({
+            codigo: 'VALIDACION', campos: { 'lineas.0.costo': expect.stringMatching(mensaje) },
+          });
+        }
+      });
+
+      it('valida la fecha: no puede ser futura, inválida ni estar vacía; hoy y días pasados sí', async () => {
+        const { c, papa, comprar, linea } = await preparar();
+        for (const fecha of [dia(1), dia(30), '2026-02-30', '31/12/2026', '', undefined, 'ayer']) {
+          await expect(comprar([linea(papa, '1')], { fechaCompra: fecha })).rejects.toMatchObject({ codigo: 'VALIDACION', campos: { fechaCompra: expect.any(String) } });
+        }
+        await comprar([linea(papa, '1')], { fechaCompra: HOY() });
+        await comprar([linea(papa, '1')], { fechaCompra: dia(-40) });
+        expect((await c.listarCompras()).total).toBe(2);
+      });
+
+      it('la fecha de registro, el usuario y el total los fija la capa de datos aunque la entrada los traiga', async () => {
+        const { usuario, papa, comprar, linea } = await preparar();
+        const { compra } = await comprar([linea(papa, '2')], { fechaCompra: dia(-3), registradaEn: '2001-01-01T00:00:00.000Z', usuarioId: 'otro', total: '1', id: 'mio' });
+        expect(compra.fechaCompra).toBe(dia(-3));
+        expect(compra.registradaEn).not.toBe('2001-01-01T00:00:00.000Z');
+        expect(compra.usuarioId).toBe(usuario.id);
+        expect(compra.total).toBe('200.00');
+        expect(compra.id).not.toBe('mio');
+      });
+
+      it('rechaza una compra sin líneas y informa a la vez todos los errores de todas las líneas', async () => {
+        const { c, papa, huevos, clave, comprar, linea } = await preparar();
+        await expect(comprar([])).rejects.toMatchObject({ codigo: 'VALIDACION', campos: { lineas: expect.stringMatching(/al menos un producto/i) } });
+        await expect(c.registrarCompra({ fechaCompra: HOY(), claveIdempotencia: clave() })).rejects.toMatchObject({ codigo: 'VALIDACION', campos: { lineas: expect.any(String) } });
+        const error = await c.registrarCompra({
+          fechaCompra: dia(2), claveIdempotencia: '',
+          lineas: [{}, { productoId: papa.id, unidadId: papa.unidadBaseId, cantidad: '0', costoUnitario: '5' }, linea(huevos, 'x')],
+        }).catch((e) => e);
+        expect(error.codigo).toBe('VALIDACION');
+        expect(Object.keys(error.campos).sort()).toEqual([
+          'claveIdempotencia', 'fechaCompra', 'lineas.0.cantidad', 'lineas.0.costo', 'lineas.0.productoId', 'lineas.0.unidadId',
+          'lineas.1.cantidad', 'lineas.2.cantidad',
+        ].sort());
+      });
+
+      it('rechaza cantidades en cero, negativas o escritas con letras, y notas demasiado largas', async () => {
+        const { papa, comprar, linea } = await preparar();
+        for (const cantidad of ['0', '-1', 'tres', '', '1e3']) {
+          await expect(comprar([linea(papa, cantidad)])).rejects.toMatchObject({ codigo: 'VALIDACION', campos: { 'lineas.0.cantidad': expect.any(String) } });
+        }
+        await expect(comprar([linea(papa, '1')], { nota: 'x'.repeat(501) })).rejects.toMatchObject({ campos: { nota: expect.any(String) } });
+      });
+
+      it('una unidad y una presentación a la vez, o ninguna, se rechazan', async () => {
+        const { a, huevos, por, comprar } = await preparar();
+        const caja = await a.presentaciones.crearPresentacion(huevos.id, { nombre: 'Caja', unidadId: por.u.id, cantidadContenida: '12' });
+        await expect(comprar([{ productoId: huevos.id, unidadId: por.u.id, presentacionId: caja.id, cantidad: '1', costoUnitario: '5' }]))
+          .rejects.toMatchObject({ campos: { 'lineas.0.unidadId': expect.any(String) } });
+        await expect(comprar([{ productoId: huevos.id, cantidad: '1', costoUnitario: '5' }]))
+          .rejects.toMatchObject({ campos: { 'lineas.0.unidadId': expect.any(String) } });
+      });
+
+      it('lo comprado queda disponible para salidas y el historial de existencias sigue consistente', async () => {
+        const { a, papa, comprar, linea, existencia } = await preparar();
+        await comprar([linea(papa, '10')]);
+        await a.inventario.registrarMovimiento({ productoId: papa.id, tipo: 'salida', subtipo: 'salida_general', cantidad: '6', unidadId: papa.unidadBaseId, claveIdempotencia: 'salida-1' });
+        expect(await existencia(papa)).toBe('4');
+        expect(await a.inventario.verificarConsistencia()).toMatchObject({ consistente: true, movimientosRevisados: 2 });
+      });
+
+      it('avisa a quienes escuchan el inventario (tiempo real) una vez por línea aceptada', async () => {
+        const { a, papa, huevos, comprar, linea } = await preparar();
+        const avisos = [];
+        const salir = a.inventario.alCambiarInventario((x) => avisos.push(x.productoId));
+        await comprar([linea(papa, '1'), linea(huevos, '1')]);
+        await expect(comprar([linea(papa, '1'), linea({ id: 'no-existe', unidadBaseId: papa.unidadBaseId }, '1')])).rejects.toBeInstanceOf(ErrorDatos);
+        salir();
+        expect(avisos).toEqual([papa.id, huevos.id]); // la compra rechazada no avisa nada
+      });
+
+      it('lo que devuelve el adaptador son copias: modificarlas no altera lo guardado', async () => {
+        const { c, papa, comprar, linea, existencia } = await preparar();
+        const { compra } = await comprar([linea(papa, '10')]);
+        compra.total = '999'; compra.lineas[0].costoTotal = '999';
+        const guardada = await c.obtenerCompra(compra.id);
+        expect(guardada.total).toBe('1000.00');
+        guardada.lineas[0].movimiento.cantidadBase = '999';
+        expect((await c.obtenerCompra(compra.id)).lineas[0].movimiento.cantidadBase).toBe('10');
+        expect(await existencia(papa)).toBe('10');
+      });
+
+      it('obtenerCompra devuelve el detalle con producto, unidad, presentación e ingreso generado; un id inexistente lanza NO_ENCONTRADO', async () => {
+        const { c, papa, por, comprar, linea } = await preparar();
+        const { compra } = await comprar([linea(papa, '1500', { unidadId: por.g.id, costoUnitario: undefined, costoTotal: '900' })]);
+        const detalle = await c.obtenerCompra(compra.id);
+        expect(detalle).toMatchObject({ id: compra.id, total: '900.00', fechaCompra: HOY() });
+        expect(detalle.claveIdempotencia).toBeUndefined();
+        expect(detalle.lineas[0]).toMatchObject({
+          producto: { id: papa.id, nombre: 'Papa' }, unidad: { abreviatura: 'g' }, presentacion: null, cantidad: '1500',
+          movimiento: { tipo: 'ingreso', subtipo: 'compra', cantidadBase: '1.5', unidadBase: { abreviatura: 'kg' }, factorAplicado: '0.001', conversionId: expect.any(String) },
+        });
+        await expect(c.obtenerCompra('no-existe')).rejects.toMatchObject({ codigo: 'NO_ENCONTRADO' });
+      });
+
+      describe('listado de compras', () => {
+        async function conCompras() {
+          const ctx = await preparar();
+          const { papa, huevos, comprar, linea } = ctx;
+          const vieja = await comprar([linea(papa, '1')], { fechaCompra: dia(-10) });
+          const media = await comprar([linea(huevos, '1'), linea(papa, '1')], { fechaCompra: dia(-5) });
+          const hoy = await comprar([linea(huevos, '2')], { fechaCompra: dia(0) });
+          return { ...ctx, vieja: vieja.compra, media: media.compra, hoy: hoy.compra };
+        }
+
+        it('lista de la más reciente a la más antigua, con total, cantidad de líneas y productos', async () => {
+          const { c, vieja, media, hoy } = await conCompras();
+          const r = await c.listarCompras();
+          expect(r.items.map((x) => x.id)).toEqual([hoy.id, media.id, vieja.id]);
+          expect(r).toMatchObject({ total: 3, pagina: 1, totalPaginas: 1 });
+          expect(r.items[1]).toMatchObject({ cantidadLineas: 2, productos: expect.arrayContaining(['Huevos', 'Papa']), total: '200.00' });
+          expect(r.items[0].claveIdempotencia).toBeUndefined();
+        });
+
+        it('filtra por fechas (inclusivas) y por producto', async () => {
+          const { c, papa, huevos, vieja, media, hoy } = await conCompras();
+          expect((await c.listarCompras({ desde: dia(-5) })).items.map((x) => x.id)).toEqual([hoy.id, media.id]);
+          expect((await c.listarCompras({ hasta: dia(-5) })).items.map((x) => x.id)).toEqual([media.id, vieja.id]);
+          expect((await c.listarCompras({ desde: dia(-5), hasta: dia(-5) })).items.map((x) => x.id)).toEqual([media.id]);
+          expect((await c.listarCompras({ productoId: papa.id })).items.map((x) => x.id)).toEqual([media.id, vieja.id]);
+          expect((await c.listarCompras({ productoId: huevos.id, desde: dia(-1) })).items.map((x) => x.id)).toEqual([hoy.id]);
+          expect((await c.listarCompras({ desde: dia(-4), hasta: dia(-1) })).total).toBe(0);
+        });
+
+        it('rechaza fechas inválidas o un rango al revés, y un producto inexistente', async () => {
+          const { c } = await conCompras();
+          await expect(c.listarCompras({ desde: '2026-13-01' })).rejects.toMatchObject({ codigo: 'VALIDACION', campos: { desde: expect.any(String) } });
+          await expect(c.listarCompras({ hasta: 'ayer' })).rejects.toMatchObject({ codigo: 'VALIDACION', campos: { hasta: expect.any(String) } });
+          await expect(c.listarCompras({ desde: dia(0), hasta: dia(-1) })).rejects.toMatchObject({ codigo: 'VALIDACION', campos: { hasta: expect.any(String) } });
+          await expect(c.listarCompras({ productoId: 'no-existe' })).rejects.toMatchObject({ codigo: 'NO_ENCONTRADO' });
+        });
+
+        it('pagina con totales correctos y una lista vacía devuelve una página válida', async () => {
+          const { c } = await conCompras();
+          const p1 = await c.listarCompras({ pagina: 1, tamanoPagina: 2 });
+          expect(p1).toMatchObject({ total: 3, totalPaginas: 2, tamanoPagina: 2 });
+          expect(p1.items).toHaveLength(2);
+          expect((await c.listarCompras({ pagina: 2, tamanoPagina: 2 })).items).toHaveLength(1);
+          expect((await c.listarCompras({ pagina: 99, tamanoPagina: 2 })).pagina).toBe(2);
+        });
+
+        it('sin compras devuelve una página vacía válida', async () => {
+          const { c } = await preparar();
+          expect(await c.listarCompras()).toMatchObject({ items: [], total: 0, pagina: 1, totalPaginas: 1 });
+        });
+      });
+
+      if (extras.crearConFalloSimulado) {
+        it('atomicidad: un fallo a mitad de la compra no deja compra, líneas, movimientos ni cambios de existencia', async () => {
+          const { adaptador: a, provocarFallo, restaurar } = extras.crearConFalloSimulado();
+          await a.autenticacion.iniciarSesion(credenciales.correo, credenciales.clave);
+          const kg = (await a.unidades.listarUnidades()).find((u) => u.abreviatura === 'kg');
+          const papa = await a.productos.crearProducto({ nombre: 'Papa', unidadBaseId: kg.id });
+          const arroz = await a.productos.crearProducto({ nombre: 'Arroz', unidadBaseId: kg.id });
+          const entrada = {
+            fechaCompra: HOY(), claveIdempotencia: 'falla-1',
+            lineas: [{ productoId: papa.id, unidadId: kg.id, cantidad: '10', costoUnitario: '800' }, { productoId: arroz.id, unidadId: kg.id, cantidad: '5', costoUnitario: '900' }],
+          };
+          provocarFallo();
+          await expect(a.compras.registrarCompra(entrada)).rejects.toBeInstanceOf(ErrorDatos);
+          restaurar();
+          expect((await a.inventario.obtenerExistencia(papa.id)).cantidadBase).toBe('0');
+          expect((await a.inventario.obtenerExistencia(arroz.id)).cantidadBase).toBe('0');
+          expect((await a.compras.listarCompras()).total).toBe(0);
+          expect(await a.inventario.verificarConsistencia()).toMatchObject({ consistente: true, movimientosRevisados: 0 });
+          // el intento fallido no cuenta como registrado: reintentar con la misma clave lo ejecuta de verdad
+          const reintento = await a.compras.registrarCompra(entrada);
+          expect(reintento.repetido).toBe(false);
+          expect((await a.inventario.obtenerExistencia(papa.id)).cantidadBase).toBe('10');
+          expect((await a.compras.listarCompras()).total).toBe(1);
           expect(await a.inventario.verificarConsistencia()).toMatchObject({ consistente: true, movimientosRevisados: 2 });
         });
       }
