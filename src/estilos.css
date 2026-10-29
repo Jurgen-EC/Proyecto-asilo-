@@ -181,3 +181,15 @@ a:focus-visible, select:focus-visible, button:focus-visible, .tarjeta--enlace:fo
 .tabla tfoot th, .tabla tfoot td { border-top: 2px solid var(--borde); border-bottom: 0; }
 .tabla tfoot th { text-align: right; }
 .tabla small { font-weight: 400; }
+
+/* ---- Formulario de compra (Versión 5) ---- */
+.formulario-compra { display: grid; gap: 1rem; max-width: 760px; }
+.linea-compra { border: 1px solid var(--borde); border-radius: 12px; background: var(--superficie); padding: 1rem; display: grid; gap: .75rem; margin: 0; min-width: 0; }
+.linea-compra legend { font-weight: 700; padding: 0 .4rem; }
+.linea-compra__costos { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
+@media (max-width: 520px) { .linea-compra__costos { grid-template-columns: 1fr; } }
+.campo--calculado input { background: var(--fondo); font-style: italic; }
+.total-compra { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: .9rem 1rem; border: 2px solid var(--borde); border-radius: 12px; font-size: 1.15rem; }
+.resumen-errores { border: 2px solid var(--error); border-radius: 12px; padding: .75rem 1rem; color: var(--error); }
+.resumen-errores ul { margin: .4rem 0 0; padding-left: 1.2rem; }
+.formulario-compra textarea { font: inherit; padding: .6rem .75rem; border: 1px solid var(--borde); border-radius: 8px; background: var(--superficie); color: var(--texto); }

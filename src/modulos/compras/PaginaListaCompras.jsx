@@ -92,7 +92,11 @@ export default function PaginaListaCompras() {
           </EstadoVacio>
         );
       }
-      return <EstadoVacio titulo="Todavía no hay compras registradas" mensaje="Las compras que se registren aparecerán aquí, de la más reciente a la más antigua." />;
+      return (
+        <EstadoVacio titulo="Todavía no hay compras registradas" mensaje="Las compras que se registren aparecerán aquí, de la más reciente a la más antigua.">
+          <Link className="boton" to="/compras/nueva">Registrar la primera compra</Link>
+        </EstadoVacio>
+      );
     }
     return (
       <div className="tabla-contenedor" aria-busy={cargando}>
@@ -128,6 +132,7 @@ export default function PaginaListaCompras() {
     <section>
       <div className="encabezado-pagina">
         <h1>Compras</h1>
+        <Link className="boton" to="/compras/nueva">Nueva compra</Link>
       </div>
       <p className="texto-suave">Cada compra registrada aumenta el inventario automáticamente: no hace falta anotar el ingreso aparte.</p>
 
