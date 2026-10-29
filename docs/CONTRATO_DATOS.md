@@ -148,6 +148,26 @@ Guarda la cantidad y la unidad **originales**, el factor y la conversión **usad
 
 **Para la base real:** bloqueo de fila (`SELECT … FOR UPDATE`) o actualización condicional dentro de una función transaccional; índice único sobre `clave_idempotencia`; `CHECK (cantidad_base >= 0)` en existencias; sin permisos de `UPDATE`/`DELETE` sobre `movimientos`; reglas puras reutilizables en `src/nucleo/datos/inventario.js`; `alCambiarInventario` con la suscripción en tiempo real de la base o una consulta periódica. Las pruebas de contrato incluyen una de **atomicidad** que cada adaptador activa con `crearConFalloSimulado`.
 
+### 2.7 Versión 5: `compras`
+Todas las operaciones exigen sesión (`SIN_SESION`). **Decisión del equipo:** registrar una compra aumenta automáticamente el inventario; compra e ingreso son **una sola operación** (sin captura doble ni duplicación).
+
+| Operación | Resultado | Errores |
+|---|---|---|
+| `registrarCompra({fechaCompra, nota?, lineas, claveIdempotencia})` | `{compra, repetido}` (la compra incluye `lineas`) | `VALIDACION` (con `campos`), `NO_ENCONTRADO`, `CONVERSION_NO_CONFIGURADA`, `UNIDAD_INCOMPATIBLE`, `OPERACION_DUPLICADA` |
+| `listarCompras({desde, hasta, productoId, pagina, tamanoPagina})` | `{items, total, pagina, tamanoPagina, totalPaginas}` | `VALIDACION` (fechas), `NO_ENCONTRADO` (producto) |
+| `obtenerCompra(id)` | Compra con líneas enriquecidas | `NO_ENCONTRADO` |
+
+- `lineas`: `[{productoId, unidadId | presentacionId, cantidad, costoUnitario | costoTotal}]`. Si hay `presentacionId`, `cantidad` es el **número de presentaciones** (3 cajas) y no se envía `unidadId`.
+- `Compra`: `{id, fechaCompra, registradaEn, usuarioId, nota, total}`. `fechaCompra` ('AAAA-MM-DD') la elige el usuario y **no puede ser futura** (se compara con el día de hoy en Costa Rica); `registradaEn`, `usuarioId`, `id` y `total` **los asigna la capa de datos**: si la entrada los trae, se ignoran.
+- `LineaCompra`: `{id, compraId, productoId, presentacionId, cantidad, unidadId, costoUnitario, costoTotal, movimientoId}`; los importes son textos con 2 decimales. Con presentación, `unidadId` es la unidad de la presentación (informativa) y el costo unitario es el de **una presentación**.
+- **Transacción única:** valida la compra → por **cada línea** ejecuta el mismo núcleo que `registrarMovimiento` (`tipo: 'ingreso'`, `subtipo: 'compra'`, `referenciaTipo: 'compra'`, `referenciaId` = id de la compra) → guarda compra, líneas, movimientos y existencias. **Si cualquier línea falla, no queda nada guardado** (ni compra, ni las líneas anteriores, ni existencias).
+- **Idempotencia:** `claveIdempotencia` de la compra (máx. 80 caracteres). La de cada línea se deriva: `<clave>:1`, `<clave>:2`… Reenviar la misma compra devuelve la original (`repetido: true`) sin duplicar; la misma clave con una compra distinta → `OPERACION_DUPLICADA`.
+- **Costos:** el usuario escribe `costoUnitario` **o** `costoTotal` (uno solo); el sistema calcula el otro y guarda ambos. Total = cantidad × unitario; unitario = total ÷ cantidad, con decimales exactos, redondeo half-up a 2 decimales (PROVISIONAL) y mayores que cero (PROVISIONAL: confirmar si se aceptan costos en cero). El costo de adquisición queda **tal como se registró**: no se promedia (la fórmula del costo promedio está sin aprobar).
+- **Errores por línea:** los mensajes por campo llevan la posición de la línea (`lineas.0.cantidad`, `lineas.1.costo`, `lineas.2.productoId`, `lineas.0.unidadId`…, 0 = primera). Un error de una línea conserva su código y agrega `linea` (1 = primera) y el mensaje «Línea N: …». Los errores de varios campos y varias líneas vienen **juntos**.
+- Una compra confirmada **no se edita ni se borra**; no existen operaciones para eso. Se corrige con el mecanismo de la V12. El ingreso generado conserva lo usado (cantidad base, factor, conversión): editar después una presentación o una equivalencia no lo reescribe.
+- Reglas puras en `src/nucleo/datos/compras.js`, reutilizables por cualquier adaptador. En el demo, compras y movimientos viven en la misma clave de `sessionStorage` para confirmarse con una sola escritura.
+- No se agregan proveedor, factura ni impuestos: no están confirmados por el hogar.
+
 ## 3. Secciones previstas (se agregan al construir cada módulo)
 _(Las versiones 2, 3 y 4 ya están en las secciones 2.2 a 2.6; ver `ESTADO_V2.md`, `ESTADO_V3.md` y `ESTADO_V4.md`.)_
 
@@ -155,7 +175,7 @@ _(Las versiones 2, 3 y 4 ya están en las secciones 2.2 a 2.6; ver `ESTADO_V2.md
 |---|---|---|
 | 3 | `unidades`, `presentaciones` y `conversiones` (hechas) | CRUD de cada una; `convertir(productoId, cantidad, origen, destino)` → `{cantidad, factor, conversionId, ...}` o error `ConversionNoConfigurada` |
 | 4 | `inventario` (hecha) | `registrarMovimiento(entrada)`, `listarExistencias`, `obtenerExistencia`, `verificarConsistencia()`, `alCambiarInventario` (sección 2.6) |
-| 5 | `compras` | `registrarCompra({fechaCompra, lineas[], nota, claveIdempotencia})`, `listar`, `obtener` |
+| 5 | `compras` (hecha) | `registrarCompra`, `listarCompras`, `obtenerCompra` (ver 2.7) |
 | 6 | `salidas`, `consumos` | `registrarSalida`, `registrarConsumo`, `listar` |
 | 7 | `movimientos` | `listar({productoId, desde, hasta, tipo, subtipo, pagina})`, `obtener(id)`, `consolidado({desde, hasta})` |
 | 8 | `gastos`, `costos` | `registrarGasto`, `listarGastos`, `historialCostosAdquisicion(productoId)` |

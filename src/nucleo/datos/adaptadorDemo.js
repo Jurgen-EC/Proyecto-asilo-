@@ -13,6 +13,10 @@ import {
   aplicarMovimiento, esNegativa, calcularConsistencia,
 } from './inventario.js';
 import {
+  validarCompra, compraCoincide, claveDeLinea, errorDeLinea, normalizarConsultaCompras, totalDeLineas,
+} from './compras.js';
+import { hoyEnCostaRica } from '../../compartido/utilidades/formato.js';
+import {
   validarUnidad, detectarUnidadDuplicada, errorUnidadDuplicada, filtrarUnidades,
   UNIDADES_SUGERIDAS, ESTADOS_UNIDAD, CONVERSIONES_GENERALES_SUGERIDAS,
 } from './unidades.js';
@@ -72,13 +76,16 @@ export function crearAdaptadorDemo({ almacen = crearAlmacen(), retardoMs = 150, 
   const oyentesInventario = new Set();
   const avisarInventario = (cambio) => oyentesInventario.forEach((cb) => { try { cb(cambio); } catch { /* un oyente con error no afecta la operación */ } });
 
-  // Inventario (V4): movimientos + existencias. Siempre se leen y se guardan JUNTOS (atomicidad).
+  // Inventario (V4) y compras (V5): movimientos, existencias, compras y líneas de compra. Siempre se leen y se guardan
+  // JUNTOS, en una sola clave (atomicidad): una compra con varias líneas se confirma con UNA escritura o no se escribe nada.
   function leerInventario() {
     try {
       const o = JSON.parse(almacen.getItem(LLAVE_INVENTARIO) ?? 'null');
-      if (o && Array.isArray(o.movimientos) && Array.isArray(o.existencias)) return o;
+      if (o && Array.isArray(o.movimientos) && Array.isArray(o.existencias)) {
+        return { ...o, compras: Array.isArray(o.compras) ? o.compras : [], compraLineas: Array.isArray(o.compraLineas) ? o.compraLineas : [] };
+      }
     } catch { /* se trata como vacío */ }
-    return { movimientos: [], existencias: [] };
+    return { movimientos: [], existencias: [], compras: [], compraLineas: [] };
   }
   const guardarInventario = (inventario) => almacen.setItem(LLAVE_INVENTARIO, JSON.stringify(inventario));
   // Los registros se ejecutan UNO TRAS OTRO (equivale al bloqueo de fila de una base real). Además, cada uno
@@ -212,6 +219,75 @@ export function crearAdaptadorDemo({ almacen = crearAlmacen(), retardoMs = 150, 
     const producto = buscarPorId(lista, id);
     if (!producto) throw new ErrorDatos(CODIGOS.NO_ENCONTRADO);
     return producto;
+  }
+
+  // NÚCLEO TRANSACCIONAL (V4), compartido por registrarMovimiento y registrarCompra (V5).
+  // Trabaja sobre una COPIA del estado ({ movimientos, existencias }) y devuelve el estado nuevo: NO escribe nada.
+  // Quien la llama confirma con una sola escritura (o descarta si algo falla). `n` ya viene validada.
+  function procesarMovimiento(inventario, n, usuario, ahora) {
+    // Idempotencia: la misma clave devuelve el movimiento original sin duplicar (aunque ahora ya no alcanzara la existencia).
+    const previo = inventario.movimientos.find((m) => m.claveIdempotencia === n.claveIdempotencia);
+    if (previo) {
+      if (!entradaCoincideConMovimiento(n, previo)) throw errorClaveReutilizada();
+      const fila = inventario.existencias.find((x) => x.productoId === previo.productoId);
+      return { repetido: true, movimiento: previo, existencia: fila, movimientos: inventario.movimientos, existencias: inventario.existencias };
+    }
+
+    // 1. Producto existente, activo y completo.
+    const unidades = leerUnidades();
+    const producto = exigirProducto(leerProductos(), n.productoId);
+    if (!producto.activo) {
+      const mensaje = 'El producto está inactivo: no se pueden registrar movimientos.';
+      throw new ErrorDatos(CODIGOS.VALIDACION, mensaje, { productoId: mensaje });
+    }
+    if (productoIncompleto(producto)) {
+      const mensaje = 'El producto no tiene unidad base. Completalo en el catálogo de productos.';
+      throw new ErrorDatos(CODIGOS.VALIDACION, mensaje, { productoId: mensaje });
+    }
+
+    // 2. Validar y convertir a la unidad base con la función central de la V3.
+    const presentaciones = leerPresentaciones();
+    const conv = convertirCantidad({
+      productoId: n.productoId, cantidad: n.cantidad,
+      origen: n.presentacionId ? { presentacionId: n.presentacionId } : n.unidadId,
+      destino: producto.unidadBaseId, unidades, presentaciones, conversiones: leerConversiones(),
+    });
+    const cantidadBase = new Decimal(conv.cantidad);
+    if (cantidadBase.isZero()) {
+      const mensaje = 'La cantidad es demasiado pequeña para la unidad base del producto.';
+      throw new ErrorDatos(CODIGOS.VALIDACION, mensaje, { cantidad: mensaje });
+    }
+
+    // 3. Si resta, verificar existencia suficiente. Se rechaza sin cambiar nada y NUNCA se convierte en otra cosa.
+    const filaActual = inventario.existencias.find((x) => x.productoId === n.productoId);
+    const actual = new Decimal(filaActual?.cantidadBase ?? '0');
+    const nueva = aplicarMovimiento(actual, n.sentido, cantidadBase);
+    if (esNegativa(nueva)) {
+      const unidadBase = unidades.find((u) => u.id === producto.unidadBaseId);
+      throw errorExistenciaInsuficiente({ nombre: producto.nombre, disponible: actual, abreviatura: unidadBase?.abreviatura ?? '' });
+    }
+
+    // 4. Insertar el movimiento (en una copia: nada se guarda todavía).
+    const presentacion = n.presentacionId ? presentaciones.find((p) => p.id === n.presentacionId) : null;
+    const movimiento = {
+      id: generarId(), productoId: n.productoId, tipo: n.tipo, subtipo: n.subtipo, sentido: n.sentido,
+      cantidadOriginal: leerDecimal(n.cantidad).toFixed(), // ya validada por convertirCantidad
+      unidadOriginalId: presentacion ? presentacion.unidadId : n.unidadId,
+      presentacionOriginalId: conv.presentacionOrigenId,
+      factorAplicado: conv.factor, conversionId: conv.conversionId, redondeado: conv.redondeado,
+      cantidadBase: cantidadBase.toFixed(), unidadBaseId: producto.unidadBaseId,
+      fechaHora: ahora, usuarioId: usuario.id, claveIdempotencia: n.claveIdempotencia, // la fecha y la hora las fija la capa de datos
+      referenciaTipo: n.referenciaTipo, referenciaId: n.referenciaId, nota: n.nota,
+    };
+    const movimientos = [...inventario.movimientos, movimiento];
+    ganchos.despuesDeInsertarMovimiento?.(movimiento); // solo pruebas: simula un fallo a mitad de la operación
+
+    // 5. Actualizar la existencia (en la copia).
+    const existencia = { productoId: n.productoId, cantidadBase: nueva.toFixed(), actualizadoEn: ahora };
+    const existencias = filaActual
+      ? inventario.existencias.map((x) => (x.productoId === n.productoId ? existencia : x))
+      : [...inventario.existencias, existencia];
+    return { repetido: false, movimiento, existencia, movimientos, existencias };
   }
 
   return {
@@ -502,75 +578,12 @@ export function crearAdaptadorDemo({ almacen = crearAlmacen(), retardoMs = 150, 
             const usuario = exigirSesion();
             const n = validarEntradaMovimiento(entrada);
             const inventario = leerInventario();
-
-            // Idempotencia: la misma clave devuelve el movimiento original sin duplicar (aunque ahora ya no alcanzara la existencia).
-            const previo = inventario.movimientos.find((m) => m.claveIdempotencia === n.claveIdempotencia);
-            if (previo) {
-              if (!entradaCoincideConMovimiento(n, previo)) throw errorClaveReutilizada();
-              const fila = inventario.existencias.find((x) => x.productoId === previo.productoId);
-              return { movimiento: { ...previo }, existencia: { ...fila }, repetido: true };
-            }
-
-            // 1. Producto existente, activo y completo.
-            const unidades = leerUnidades();
-            const producto = exigirProducto(leerProductos(), n.productoId);
-            if (!producto.activo) {
-              const mensaje = 'El producto está inactivo: no se pueden registrar movimientos.';
-              throw new ErrorDatos(CODIGOS.VALIDACION, mensaje, { productoId: mensaje });
-            }
-            if (productoIncompleto(producto)) {
-              const mensaje = 'El producto no tiene unidad base. Completalo en el catálogo de productos.';
-              throw new ErrorDatos(CODIGOS.VALIDACION, mensaje, { productoId: mensaje });
-            }
-
-            // 2. Validar y convertir a la unidad base con la función central de la V3.
-            const presentaciones = leerPresentaciones();
-            const conv = convertirCantidad({
-              productoId: n.productoId, cantidad: n.cantidad,
-              origen: n.presentacionId ? { presentacionId: n.presentacionId } : n.unidadId,
-              destino: producto.unidadBaseId, unidades, presentaciones, conversiones: leerConversiones(),
-            });
-            const cantidadBase = new Decimal(conv.cantidad);
-            if (cantidadBase.isZero()) {
-              const mensaje = 'La cantidad es demasiado pequeña para la unidad base del producto.';
-              throw new ErrorDatos(CODIGOS.VALIDACION, mensaje, { cantidad: mensaje });
-            }
-
-            // 3. Si resta, verificar existencia suficiente. Se rechaza sin cambiar nada y NUNCA se convierte en otra cosa.
-            const filaActual = inventario.existencias.find((x) => x.productoId === n.productoId);
-            const actual = new Decimal(filaActual?.cantidadBase ?? '0');
-            const nueva = aplicarMovimiento(actual, n.sentido, cantidadBase);
-            if (esNegativa(nueva)) {
-              const unidadBase = unidades.find((u) => u.id === producto.unidadBaseId);
-              throw errorExistenciaInsuficiente({ nombre: producto.nombre, disponible: actual, abreviatura: unidadBase?.abreviatura ?? '' });
-            }
-
-            // 4. Insertar el movimiento (en una copia: nada se guarda todavía).
-            const ahora = new Date().toISOString(); // la fecha y la hora las fija la capa de datos, no el usuario
-            const presentacion = n.presentacionId ? presentaciones.find((p) => p.id === n.presentacionId) : null;
-            const movimiento = {
-              id: generarId(), productoId: n.productoId, tipo: n.tipo, subtipo: n.subtipo, sentido: n.sentido,
-              cantidadOriginal: leerDecimal(n.cantidad).toFixed(), // ya validada por convertirCantidad
-              unidadOriginalId: presentacion ? presentacion.unidadId : n.unidadId,
-              presentacionOriginalId: conv.presentacionOrigenId,
-              factorAplicado: conv.factor, conversionId: conv.conversionId, redondeado: conv.redondeado,
-              cantidadBase: cantidadBase.toFixed(), unidadBaseId: producto.unidadBaseId,
-              fechaHora: ahora, usuarioId: usuario.id, claveIdempotencia: n.claveIdempotencia,
-              referenciaTipo: n.referenciaTipo, referenciaId: n.referenciaId, nota: n.nota,
-            };
-            const movimientos = [...inventario.movimientos, movimiento];
-            ganchos.despuesDeInsertarMovimiento?.(movimiento); // solo pruebas: simula un fallo a mitad de la operación
-
-            // 5. Actualizar la existencia y confirmar TODO con una sola escritura.
-            const existencia = { productoId: n.productoId, cantidadBase: nueva.toFixed(), actualizadoEn: ahora };
-            const existencias = filaActual
-              ? inventario.existencias.map((x) => (x.productoId === n.productoId ? existencia : x))
-              : [...inventario.existencias, existencia];
+            const r = procesarMovimiento(inventario, n, usuario, new Date().toISOString());
+            if (r.repetido) return { movimiento: { ...r.movimiento }, existencia: { ...r.existencia }, repetido: true };
             ganchos.antesDeConfirmar?.();
-            guardarInventario({ movimientos, existencias });
-
-            avisarInventario({ productoId: n.productoId, movimientoId: movimiento.id }); // tiempo real
-            return { movimiento: { ...movimiento }, existencia: { ...existencia }, repetido: false };
+            guardarInventario({ ...inventario, movimientos: r.movimientos, existencias: r.existencias });
+            avisarInventario({ productoId: n.productoId, movimientoId: r.movimiento.id }); // tiempo real
+            return { movimiento: { ...r.movimiento }, existencia: { ...r.existencia }, repetido: false };
           } catch (e) {
             if (e instanceof ErrorDatos) throw e;
             throw new ErrorDatos(CODIGOS.DESCONOCIDO); // un fallo inesperado no deja nada guardado
@@ -620,6 +633,114 @@ export function crearAdaptadorDemo({ almacen = crearAlmacen(), retardoMs = 150, 
       alCambiarInventario(callback) {
         oyentesInventario.add(callback);
         return () => oyentesInventario.delete(callback);
+      },
+    },
+    compras: {
+      // Compra e ingreso son UNA sola operación: cada línea genera un ingreso por el mismo núcleo que registrarMovimiento
+      // y TODO (compra, líneas, movimientos y existencias) se confirma con una sola escritura. Si una línea falla, no queda nada.
+      async registrarCompra(entrada) {
+        await esperar(retardoMs);
+        return enSerie(() => {
+          try {
+            const usuario = exigirSesion();
+            const ahoraFecha = new Date();
+            const ahora = ahoraFecha.toISOString();
+            const n = validarCompra(entrada, { hoy: hoyEnCostaRica(ahoraFecha) });
+            const inventario = leerInventario();
+
+            // Idempotencia: reenviar la misma compra devuelve la original; la misma clave con otra compra se rechaza.
+            const previa = inventario.compras.find((c) => c.claveIdempotencia === n.claveIdempotencia);
+            if (previa) {
+              const lineasPrevias = inventario.compraLineas.filter((l) => l.compraId === previa.id);
+              if (!compraCoincide(n, previa, lineasPrevias)) throw errorClaveReutilizada();
+              return { compra: { ...previa, lineas: lineasPrevias.map((l) => ({ ...l })) }, repetido: true };
+            }
+
+            const compraId = generarId();
+            let estado = inventario;
+            const lineas = [];
+            n.lineas.forEach((l, i) => {
+              try {
+                const entradaMovimiento = validarEntradaMovimiento({
+                  productoId: l.productoId, tipo: 'ingreso', subtipo: 'compra', cantidad: l.cantidad,
+                  unidadId: l.unidadId ?? undefined, presentacionId: l.presentacionId ?? undefined,
+                  referenciaTipo: 'compra', referenciaId: compraId, claveIdempotencia: claveDeLinea(n.claveIdempotencia, i),
+                });
+                const r = procesarMovimiento(estado, entradaMovimiento, usuario, ahora);
+                estado = { ...estado, movimientos: r.movimientos, existencias: r.existencias };
+                lineas.push({
+                  id: generarId(), compraId, productoId: l.productoId, presentacionId: r.movimiento.presentacionOriginalId,
+                  cantidad: r.movimiento.cantidadOriginal, unidadId: r.movimiento.unidadOriginalId,
+                  costoUnitario: l.costoUnitario, costoTotal: l.costoTotal, movimientoId: r.movimiento.id,
+                });
+              } catch (e) {
+                if (e instanceof ErrorDatos) throw errorDeLinea(e, i);
+                throw e;
+              }
+            });
+            const compra = {
+              id: compraId, fechaCompra: n.fechaCompra, registradaEn: ahora, usuarioId: usuario.id, nota: n.nota,
+              total: totalDeLineas(lineas), claveIdempotencia: n.claveIdempotencia,
+            };
+            ganchos.antesDeConfirmar?.();
+            guardarInventario({
+              ...estado, compras: [...inventario.compras, compra], compraLineas: [...inventario.compraLineas, ...lineas],
+            });
+            const nuevos = estado.movimientos.slice(inventario.movimientos.length);
+            nuevos.forEach((m) => avisarInventario({ productoId: m.productoId, movimientoId: m.id })); // tiempo real
+            return { compra: { ...compra, lineas: lineas.map((l) => ({ ...l })) }, repetido: false };
+          } catch (e) {
+            if (e instanceof ErrorDatos) throw e;
+            throw new ErrorDatos(CODIGOS.DESCONOCIDO); // un fallo inesperado no deja nada guardado
+          }
+        });
+      },
+      async listarCompras(consulta) {
+        await esperar(retardoMs);
+        exigirSesion();
+        const { desde, hasta, productoId, pagina, tamanoPagina } = normalizarConsultaCompras(consulta);
+        if (productoId) exigirProducto(leerProductos(), productoId);
+        const { compras, compraLineas } = leerInventario();
+        const nombres = new Map(leerProductos().map((p) => [p.id, p.nombre]));
+        const filtradas = compras
+          .filter((c) => (!desde || c.fechaCompra >= desde) && (!hasta || c.fechaCompra <= hasta))
+          .filter((c) => !productoId || compraLineas.some((l) => l.compraId === c.id && l.productoId === productoId))
+          .sort((a, b) => b.fechaCompra.localeCompare(a.fechaCompra) || b.registradaEn.localeCompare(a.registradaEn));
+        const pag = paginar(filtradas, pagina, tamanoPagina);
+        const items = pag.items.map((c) => {
+          const propias = compraLineas.filter((l) => l.compraId === c.id);
+          const productos = [...new Set(propias.map((l) => nombres.get(l.productoId) ?? ''))].filter(Boolean);
+          const { claveIdempotencia, ...resto } = c;
+          return { ...resto, cantidadLineas: propias.length, productos };
+        });
+        return { ...pag, items };
+      },
+      async obtenerCompra(id) {
+        await esperar(retardoMs);
+        exigirSesion();
+        const { compras, compraLineas, movimientos } = leerInventario();
+        const compra = compras.find((c) => c.id === id);
+        if (!compra) throw new ErrorDatos(CODIGOS.NO_ENCONTRADO);
+        const productos = new Map(leerProductos().map((p) => [p.id, p]));
+        const unidades = new Map(leerUnidades().map((u) => [u.id, u]));
+        const presentaciones = new Map(leerPresentaciones().map((p) => [p.id, p]));
+        const resumenUnidad = (uid) => { const u = unidades.get(uid); return u ? { id: u.id, nombre: u.nombre, abreviatura: u.abreviatura } : null; };
+        const lineas = compraLineas.filter((l) => l.compraId === id).map((l) => {
+          const m = movimientos.find((x) => x.id === l.movimientoId);
+          return {
+            ...l,
+            producto: { id: l.productoId, nombre: productos.get(l.productoId)?.nombre ?? '' },
+            unidad: resumenUnidad(l.unidadId),
+            presentacion: l.presentacionId ? { id: l.presentacionId, nombre: presentaciones.get(l.presentacionId)?.nombre ?? '' } : null,
+            // El ingreso generado conserva lo USADO: cantidad base, factor y conversión (cambiar después una equivalencia no lo reescribe).
+            movimiento: m ? {
+              id: m.id, tipo: m.tipo, subtipo: m.subtipo, cantidadBase: m.cantidadBase, unidadBase: resumenUnidad(m.unidadBaseId),
+              factorAplicado: m.factorAplicado, conversionId: m.conversionId, redondeado: m.redondeado, fechaHora: m.fechaHora,
+            } : null,
+          };
+        });
+        const { claveIdempotencia, ...resto } = compra;
+        return { ...resto, lineas };
       },
     },
   };

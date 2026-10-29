@@ -75,6 +75,19 @@
  *     alCambiarInventario(callback) -> () => void   // tiempo real: callback({ productoId, movimientoId }) tras cada movimiento aceptado
  *   }                                 // No existe editar ni eliminar movimientos: son inmutables. Se corrigen con movimientos nuevos (V12).
  *
+ *   compras: {                     // Versión 5. Todas exigen sesión (SIN_SESION). Compra e ingreso son UNA sola operación.
+ *     registrarCompra({ fechaCompra 'AAAA-MM-DD', nota?, lineas: [{ productoId, unidadId | presentacionId, cantidad, costoUnitario | costoTotal }], claveIdempotencia })
+ *         -> Promise<{ compra: Compra (con lineas), repetido }>
+ *         // UNA sola transacción: valida la compra -> por CADA línea ejecuta el mismo núcleo que registrarMovimiento (ingreso, subtipo 'compra',
+ *         // referencia a la compra) -> guarda compra, líneas, movimientos y existencias. Si cualquier línea falla, NO queda nada guardado.
+ *         // Idempotente: la misma claveIdempotencia devuelve la compra original (repetido: true); con otra compra distinta -> OPERACION_DUPLICADA.
+ *         // Errores: VALIDACION (con campos: fechaCompra, nota, lineas, y por línea `lineas.N.productoId|unidadId|cantidad|costo`, N desde 0),
+ *         // NO_ENCONTRADO, CONVERSION_NO_CONFIGURADA, UNIDAD_INCOMPATIBLE (estos con `linea` y campos de la línea), OPERACION_DUPLICADA
+ *     listarCompras({ desde, hasta, productoId, pagina, tamanoPagina }) -> Promise<{ items: [{ ...Compra sin lineas, cantidadLineas, productos[] }], total, pagina, tamanoPagina, totalPaginas }>
+ *         // desde/hasta 'AAAA-MM-DD' inclusivos; más reciente primero; VALIDACION si las fechas no son válidas; NO_ENCONTRADO si el producto no existe
+ *     obtenerCompra(id) -> Promise<Compra con lineas enriquecidas (producto, unidad, presentacion, movimiento generado)>   // NO_ENCONTRADO
+ *   }                                 // No existe editar ni eliminar compras: una compra confirmada no se edita (se corrige en la V12).
+ *
  * Usuario:  { id: string, correo: string, nombre: string }
  * Producto: { id, nombre, nombreNormalizado, activo, unidadBaseId (obligatoria desde la V3; null = INCOMPLETO),
  *             creadoEn, actualizadoEn (ISO), creadoPor (id del usuario) }
@@ -85,6 +98,9 @@
  * Presentacion: { id, productoId, nombre, nombreNormalizado, unidadId, cantidadContenida (texto decimal > 0, hasta 4 decimales),
  *                 activo, creadoEn, actualizadoEn (ISO), creadoPor }.  Ejemplo: Caja = 12 unidades.
  * Reglas de las presentaciones (nombre único por producto, cantidad > 0): ver presentaciones.js
+ * Compra:   { id, fechaCompra ('AAAA-MM-DD', elegida por el usuario, no futura), registradaEn (ISO, del servidor), usuarioId, nota, total (texto, 2 decimales) }
+ * LineaCompra: { id, compraId, productoId, presentacionId (o null), cantidad, unidadId, costoUnitario, costoTotal (textos, 2 decimales), movimientoId }
+ * Reglas de las compras (costos, fecha, validación por línea): ver compras.js
  * Conversion: { id, productoId (null = general), unidadOrigenId, unidadDestinoId, factor (1 origen = factor destino), vigente,
  *               sugerida, reemplazaId, reemplazadaPorId, creadoEn, creadoPor }.  Reglas y función de cálculo: conversiones.js
  * Movimiento: { id, productoId, tipo, subtipo, sentido (1 | -1), cantidadOriginal, unidadOriginalId, presentacionOriginalId (o null),
@@ -99,6 +115,7 @@ const SECCIONES_REQUERIDAS = {
   autenticacion: ['iniciarSesion', 'cerrarSesion', 'obtenerSesion', 'alCambiarSesion'],
   productos: ['crearProducto', 'editarProducto', 'obtenerProducto', 'listarProductos', 'cambiarEstadoProducto'],
   unidades: ['crearUnidad', 'editarUnidad', 'obtenerUnidad', 'listarUnidades', 'cambiarEstadoUnidad'],
+  compras: ['registrarCompra', 'listarCompras', 'obtenerCompra'],
   conversiones: ['crearConversion', 'cambiarFactorConversion', 'retirarConversion', 'obtenerConversion', 'listarConversiones', 'convertir'],
   presentaciones: ['crearPresentacion', 'editarPresentacion', 'obtenerPresentacion', 'listarPresentaciones', 'cambiarEstadoPresentacion'],
   inventario: ['registrarMovimiento', 'listarExistencias', 'obtenerExistencia', 'verificarConsistencia', 'alCambiarInventario'],
