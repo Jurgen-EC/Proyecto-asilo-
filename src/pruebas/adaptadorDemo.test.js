@@ -63,3 +63,34 @@ describe('productos heredados de la V2 sin unidad base (INCOMPLETOS)', () => {
     expect((await a.productos.editarProducto('v2-1', { nombre: 'Frijoles negros' })).unidadBaseId).toBeNull();
   });
 });
+
+// Fallo simulado EXACTAMENTE en la segunda línea de una compra (la primera ya se había procesado en la copia de trabajo).
+describe('compra: fallo a mitad de camino en el adaptador demo', () => {
+  it('si la segunda línea falla después de procesar la primera, no queda nada guardado', async () => {
+    let movimientosInsertados = 0;
+    const ganchos = { despuesDeInsertarMovimiento: () => { movimientosInsertados += 1; if (movimientosInsertados === 2) throw new Error('Fallo simulado'); } };
+    const a = crearAdaptadorDemo({ retardoMs: 0, ganchos });
+    await a.autenticacion.iniciarSesion(USUARIO_DEMO.correo, CLAVE_DEMO);
+    const kg = (await a.unidades.listarUnidades()).find((u) => u.abreviatura === 'kg');
+    const papa = await a.productos.crearProducto({ nombre: 'Papa', unidadBaseId: kg.id });
+    const arroz = await a.productos.crearProducto({ nombre: 'Arroz', unidadBaseId: kg.id });
+    const hoy = new Date().toISOString().slice(0, 10);
+    const entrada = {
+      fechaCompra: new Date(Date.now() - 86400000).toISOString().slice(0, 10) <= hoy ? new Date(Date.now() - 86400000).toISOString().slice(0, 10) : hoy,
+      claveIdempotencia: 'k-1',
+      lineas: [
+        { productoId: papa.id, unidadId: kg.id, cantidad: '10', costoUnitario: '800' },
+        { productoId: arroz.id, unidadId: kg.id, cantidad: '5', costoUnitario: '900' },
+      ],
+    };
+    await expect(a.compras.registrarCompra(entrada)).rejects.toMatchObject({ codigo: 'DESCONOCIDO' });
+    expect(movimientosInsertados).toBe(2); // la primera línea sí se procesó; aun así no se guardó
+    expect((await a.inventario.obtenerExistencia(papa.id)).cantidadBase).toBe('0');
+    expect((await a.compras.listarCompras()).total).toBe(0);
+    expect(await a.inventario.verificarConsistencia()).toMatchObject({ consistente: true, movimientosRevisados: 0 });
+    // sin el fallo, el mismo reintento funciona
+    delete ganchos.despuesDeInsertarMovimiento;
+    expect((await a.compras.registrarCompra(entrada)).repetido).toBe(false);
+    expect((await a.inventario.obtenerExistencia(arroz.id)).cantidadBase).toBe('5');
+  });
+});

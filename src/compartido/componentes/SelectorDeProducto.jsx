@@ -17,8 +17,10 @@ const MAX_OPCIONES = 8;
  *
  * Desde la V3 solo ofrece productos COMPLETOS (con unidad base): un producto sin unidad base
  * no se puede usar en operaciones. `incluirIncompletos` existe solo para pantallas de administración.
+ * `incluirInactivos` (V5) existe para FILTRAR el historial (por ejemplo, compras de un producto que ya se desactivó):
+ * nunca se usa en formularios de operaciones nuevas.
  */
-export default function SelectorDeProducto({ valor = null, onChange, etiqueta = 'Producto', error = '', deshabilitado = false, incluirIncompletos = false, id: idExterno }) {
+export default function SelectorDeProducto({ valor = null, onChange, etiqueta = 'Producto', error = '', deshabilitado = false, incluirIncompletos = false, incluirInactivos = false, id: idExterno }) {
   const datos = useDatos();
   const idGenerado = useId();
   const id = idExterno ?? `selector-${idGenerado}`;
@@ -38,7 +40,7 @@ export default function SelectorDeProducto({ valor = null, onChange, etiqueta = 
     const numero = ++peticion.current;
     setCarga((c) => ({ ...c, estado: 'cargando' }));
     datos.productos
-      .listarProductos({ busqueda: consulta, estado: 'activos', tamanoPagina: MAX_OPCIONES, soloCompletos: !incluirIncompletos })
+      .listarProductos({ busqueda: consulta, estado: incluirInactivos ? 'todos' : 'activos', tamanoPagina: MAX_OPCIONES, soloCompletos: !incluirIncompletos })
       .then((r) => {
         if (numero !== peticion.current) return;
         setCarga({ estado: 'listo', items: r.items, total: r.total });
@@ -47,7 +49,7 @@ export default function SelectorDeProducto({ valor = null, onChange, etiqueta = 
       .catch((e) => {
         if (numero === peticion.current) setCarga({ estado: 'error', items: [], total: 0, mensaje: mensajeParaUsuario(e) });
       });
-  }, [datos, consulta, abierto, valor, incluirIncompletos]);
+  }, [datos, consulta, abierto, valor, incluirIncompletos, incluirInactivos]);
 
   useEffect(() => {
     if (!valor && enfocarAlLimpiar.current) {
@@ -122,7 +124,7 @@ export default function SelectorDeProducto({ valor = null, onChange, etiqueta = 
                 className={`selector__opcion ${i === indiceActivo ? 'selector__opcion--activa' : ''}`}
                 onMouseDown={(e) => e.preventDefault()} onClick={() => elegir(p)}
               >
-                {p.nombre}
+                {p.nombre}{p.activo ? '' : ' (inactivo)'}
               </li>
             ))}
           </ul>

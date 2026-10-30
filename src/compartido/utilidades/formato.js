@@ -35,3 +35,14 @@ export function formatearCantidad(valor, unidad = '') {
   const texto = new Intl.NumberFormat('es-CR', { maximumFractionDigits: 4 }).format(aDecimal(valor).toString());
   return unidad ? `${texto} ${unidad}` : texto;
 }
+
+/** Fecha de hoy en Costa Rica como 'AAAA-MM-DD' (la usan las reglas de «fecha no futura»). */
+export function hoyEnCostaRica(ahora = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: ZONA_HORARIA, year: 'numeric', month: '2-digit', day: '2-digit' }).format(ahora);
+}
+
+/** Muestra una fecha de calendario 'AAAA-MM-DD' como dd/mm/aaaa SIN convertir zonas horarias (es un día, no un instante). */
+export function formatearFechaDia(valor) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(valor ?? ''));
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : '';
+}
