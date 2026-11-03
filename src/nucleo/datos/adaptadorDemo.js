@@ -15,6 +15,9 @@ import {
 import {
   validarCompra, compraCoincide, claveDeLinea, errorDeLinea, normalizarConsultaCompras, totalDeLineas,
 } from './compras.js';
+import {
+  validarOperacion, operacionCoincide, errorDeOperacion, claveDelMovimiento, normalizarConsultaOperaciones, CLASES_OPERACION,
+} from './salidas.js';
 import { hoyEnCostaRica } from '../../compartido/utilidades/formato.js';
 import {
   validarUnidad, detectarUnidadDuplicada, errorUnidadDuplicada, filtrarUnidades,
@@ -76,16 +79,20 @@ export function crearAdaptadorDemo({ almacen = crearAlmacen(), retardoMs = 150, 
   const oyentesInventario = new Set();
   const avisarInventario = (cambio) => oyentesInventario.forEach((cb) => { try { cb(cambio); } catch { /* un oyente con error no afecta la operación */ } });
 
-  // Inventario (V4) y compras (V5): movimientos, existencias, compras y líneas de compra. Siempre se leen y se guardan
-  // JUNTOS, en una sola clave (atomicidad): una compra con varias líneas se confirma con UNA escritura o no se escribe nada.
+  // Inventario (V4), compras (V5), salidas y consumos (V6): movimientos, existencias, compras, líneas de compra, salidas y consumos.
+  // Siempre se leen y se guardan JUNTOS, en una sola clave (atomicidad): cada operación se confirma con UNA escritura o no se escribe nada.
   function leerInventario() {
     try {
       const o = JSON.parse(almacen.getItem(LLAVE_INVENTARIO) ?? 'null');
       if (o && Array.isArray(o.movimientos) && Array.isArray(o.existencias)) {
-        return { ...o, compras: Array.isArray(o.compras) ? o.compras : [], compraLineas: Array.isArray(o.compraLineas) ? o.compraLineas : [] };
+        return {
+          ...o,
+          compras: Array.isArray(o.compras) ? o.compras : [], compraLineas: Array.isArray(o.compraLineas) ? o.compraLineas : [],
+          salidas: Array.isArray(o.salidas) ? o.salidas : [], consumos: Array.isArray(o.consumos) ? o.consumos : [],
+        };
       }
     } catch { /* se trata como vacío */ }
-    return { movimientos: [], existencias: [], compras: [], compraLineas: [] };
+    return { movimientos: [], existencias: [], compras: [], compraLineas: [], salidas: [], consumos: [] };
   }
   const guardarInventario = (inventario) => almacen.setItem(LLAVE_INVENTARIO, JSON.stringify(inventario));
   // Los registros se ejecutan UNO TRAS OTRO (equivale al bloqueo de fila de una base real). Además, cada uno
@@ -288,6 +295,112 @@ export function crearAdaptadorDemo({ almacen = crearAlmacen(), retardoMs = 150, 
       ? inventario.existencias.map((x) => (x.productoId === n.productoId ? existencia : x))
       : [...inventario.existencias, existencia];
     return { repetido: false, movimiento, existencia, movimientos, existencias };
+  }
+
+  // SALIDAS Y CONSUMOS (V6). Una operación = UN producto = UN movimiento, procesado por el mismo núcleo que registrarMovimiento.
+  // Todo (movimiento, existencia y el registro de la salida o del consumo) se confirma con UNA sola escritura.
+  const listaDe = (inventario, clase) => (clase === 'salida' ? inventario.salidas : inventario.consumos);
+
+  // Vista enriquecida de una salida o consumo: lo guardado más el producto, la unidad y el movimiento que generó.
+  function crearVistas(inventario) {
+    const productos = new Map(leerProductos().map((p) => [p.id, p]));
+    const unidades = new Map(leerUnidades().map((u) => [u.id, u]));
+    const presentaciones = new Map(leerPresentaciones().map((p) => [p.id, p]));
+    const movimientos = new Map(inventario.movimientos.map((m) => [m.id, m]));
+    const resumenUnidad = (id) => { const u = unidades.get(id); return u ? { id: u.id, nombre: u.nombre, abreviatura: u.abreviatura } : null; };
+    return (registro) => {
+      const m = movimientos.get(registro.movimientoId);
+      const { claveIdempotencia, ...propio } = registro;
+      return {
+        ...propio,
+        usuarioId: m.usuarioId,
+        producto: { id: m.productoId, nombre: productos.get(m.productoId)?.nombre ?? '' },
+        // La cantidad ingresada conserva lo USADO (unidad o presentación, factor y conversión): cambiar después una equivalencia no la reescribe.
+        cantidad: m.cantidadOriginal,
+        unidad: resumenUnidad(m.unidadOriginalId),
+        presentacion: m.presentacionOriginalId ? { id: m.presentacionOriginalId, nombre: presentaciones.get(m.presentacionOriginalId)?.nombre ?? '' } : null,
+        movimiento: {
+          id: m.id, tipo: m.tipo, subtipo: m.subtipo, cantidadBase: m.cantidadBase, unidadBase: resumenUnidad(m.unidadBaseId),
+          factorAplicado: m.factorAplicado, conversionId: m.conversionId, redondeado: m.redondeado, fechaHora: m.fechaHora,
+        },
+      };
+    };
+  }
+
+  function registrarOperacion(clase, entrada) {
+    const { subtipo, referenciaTipo } = CLASES_OPERACION[clase];
+    return enSerie(() => {
+      try {
+        const usuario = exigirSesion();
+        const ahora = new Date().toISOString();
+        const n = validarOperacion(entrada, clase);
+        const inventario = leerInventario();
+        const registros = listaDe(inventario, clase);
+
+        // Idempotencia: reenviar la misma operación devuelve la original; la misma clave con otra operación se rechaza.
+        const previo = registros.find((r) => r.claveIdempotencia === n.claveIdempotencia);
+        if (previo) {
+          const movimiento = inventario.movimientos.find((m) => m.id === previo.movimientoId);
+          if (!operacionCoincide(n, previo, movimiento)) throw errorClaveReutilizada();
+          const fila = inventario.existencias.find((x) => x.productoId === movimiento.productoId);
+          return { [clase]: crearVistas(inventario)(previo), existencia: { ...fila }, repetido: true };
+        }
+
+        const id = generarId();
+        const entradaMovimiento = validarEntradaMovimiento({
+          productoId: n.productoId, tipo: 'salida', subtipo, cantidad: n.cantidad,
+          unidadId: n.unidadId ?? undefined, presentacionId: n.presentacionId ?? undefined,
+          referenciaTipo, referenciaId: id, claveIdempotencia: claveDelMovimiento(n.claveIdempotencia),
+        });
+        let r;
+        try {
+          r = procesarMovimiento(inventario, entradaMovimiento, usuario, ahora);
+        } catch (e) {
+          throw e instanceof ErrorDatos ? errorDeOperacion(e) : e;
+        }
+        if (r.repetido) throw errorClaveReutilizada(); // ese movimiento ya existe pero no es de esta operación
+
+        const registro = {
+          id, movimientoId: r.movimiento.id, ...(clase === 'salida' ? { motivo: n.motivo } : {}),
+          nota: n.nota, fechaRegistro: ahora, claveIdempotencia: n.claveIdempotencia,
+        };
+        ganchos.antesDeConfirmar?.();
+        const siguiente = {
+          ...inventario, movimientos: r.movimientos, existencias: r.existencias,
+          [clase === 'salida' ? 'salidas' : 'consumos']: [...registros, registro],
+        };
+        guardarInventario(siguiente);
+        avisarInventario({ productoId: n.productoId, movimientoId: r.movimiento.id }); // tiempo real
+        return { [clase]: crearVistas(siguiente)(registro), existencia: { ...r.existencia }, repetido: false };
+      } catch (e) {
+        if (e instanceof ErrorDatos) throw e;
+        throw new ErrorDatos(CODIGOS.DESCONOCIDO); // un fallo inesperado no deja nada guardado
+      }
+    });
+  }
+
+  function listarOperaciones(clase, consulta) {
+    const { desde, hasta, productoId, pagina, tamanoPagina } = normalizarConsultaOperaciones(consulta);
+    if (productoId) exigirProducto(leerProductos(), productoId);
+    const inventario = leerInventario();
+    const vista = crearVistas(inventario);
+    const filtradas = listaDe(inventario, clase)
+      .map((registro, posicion) => ({ posicion, v: vista(registro) }))
+      .filter(({ v }) => {
+        const dia = hoyEnCostaRica(new Date(v.fechaRegistro)); // el día se cuenta en hora de Costa Rica
+        return (!desde || dia >= desde) && (!hasta || dia <= hasta);
+      })
+      .filter(({ v }) => !productoId || v.producto.id === productoId)
+      .sort((a, b) => b.v.fechaRegistro.localeCompare(a.v.fechaRegistro) || b.posicion - a.posicion) // la más reciente primero
+      .map(({ v }) => v);
+    return paginar(filtradas, pagina, tamanoPagina);
+  }
+
+  function obtenerOperacion(clase, id) {
+    const inventario = leerInventario();
+    const registro = listaDe(inventario, clase).find((r) => r.id === id);
+    if (!registro) throw new ErrorDatos(CODIGOS.NO_ENCONTRADO);
+    return crearVistas(inventario)(registro);
   }
 
   return {
@@ -741,6 +854,40 @@ export function crearAdaptadorDemo({ almacen = crearAlmacen(), retardoMs = 150, 
         });
         const { claveIdempotencia, ...resto } = compra;
         return { ...resto, lineas };
+      },
+    },
+    salidas: {
+      // Una salida descuenta existencias por el MISMO núcleo que registrarMovimiento. Mayor que lo disponible: se rechaza sin guardar nada.
+      async registrarSalida(entrada) {
+        await esperar(retardoMs);
+        return registrarOperacion('salida', entrada);
+      },
+      async listarSalidas(consulta) {
+        await esperar(retardoMs);
+        exigirSesion();
+        return listarOperaciones('salida', consulta);
+      },
+      async obtenerSalida(id) {
+        await esperar(retardoMs);
+        exigirSesion();
+        return obtenerOperacion('salida', id);
+      },
+    },
+    consumos: {
+      // Un consumo NO es una salida con otro nombre: tiene su propia tabla, sin motivo (el costo llega en la V8).
+      async registrarConsumo(entrada) {
+        await esperar(retardoMs);
+        return registrarOperacion('consumo', entrada);
+      },
+      async listarConsumos(consulta) {
+        await esperar(retardoMs);
+        exigirSesion();
+        return listarOperaciones('consumo', consulta);
+      },
+      async obtenerConsumo(id) {
+        await esperar(retardoMs);
+        exigirSesion();
+        return obtenerOperacion('consumo', id);
       },
     },
   };
