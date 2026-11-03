@@ -168,15 +168,39 @@ Todas las operaciones exigen sesión (`SIN_SESION`). **Decisión del equipo:** r
 - Reglas puras en `src/nucleo/datos/compras.js`, reutilizables por cualquier adaptador. En el demo, compras y movimientos viven en la misma clave de `sessionStorage` para confirmarse con una sola escritura.
 - No se agregan proveedor, factura ni impuestos: no están confirmados por el hogar.
 
+### 2.8 Versión 6: `salidas` y `consumos`
+Todas las operaciones exigen sesión (`SIN_SESION`). **Decisión del equipo (PROPUESTA TÉCNICA, pendiente de validar con el hogar):** salida y consumo son conceptos **distintos**: cada uno tiene su propia tabla, su propio servicio y sus propias pantallas. Los dos descuentan existencias por el **mismo núcleo** que `registrarMovimiento` (sin duplicar lógica de existencias) y cada operación genera **exactamente un movimiento** (un producto por operación).
+
+| Operación | Resultado | Errores |
+|---|---|---|
+| `registrarSalida({productoId, cantidad, unidadId \| presentacionId, motivo, nota?, claveIdempotencia})` | `{salida, existencia, repetido}` | `VALIDACION` (con `campos`), `NO_ENCONTRADO`, `CONVERSION_NO_CONFIGURADA`, `UNIDAD_INCOMPATIBLE`, `OPERACION_DUPLICADA` |
+| `listarSalidas({desde, hasta, productoId, pagina, tamanoPagina})` | `{items, total, pagina, tamanoPagina, totalPaginas}` | `VALIDACION` (fechas), `NO_ENCONTRADO` (producto) |
+| `obtenerSalida(id)` | `Salida` | `NO_ENCONTRADO` |
+| `registrarConsumo({productoId, cantidad, unidadId \| presentacionId, nota?, claveIdempotencia})` | `{consumo, existencia, repetido}` | los mismos, sin `motivo` |
+| `listarConsumos(...)`, `obtenerConsumo(id)` | igual que las salidas | igual |
+
+- **Movimiento generado:** `tipo: 'salida'`; `subtipo: 'salida_general'` (salida) o `'consumo'` (consumo); `referenciaTipo: 'salida'` o `'consumo'` y `referenciaId` = id del registro. Así ambos aparecen como **Salidas** en el historial y el consolidado (V7) sin perder su distinción. La nota y el motivo viven en la salida o el consumo, no en el movimiento.
+- **Salida:** `{id, movimientoId, motivo, nota, fechaRegistro, usuarioId, producto: {id, nombre}, cantidad, unidad, presentacion, movimiento: {id, tipo, subtipo, cantidadBase, unidadBase, factorAplicado, conversionId, redondeado, fechaHora}}`. **Consumo:** igual pero **sin `motivo`**. `fechaRegistro`, `usuarioId` e `id` los asigna la capa de datos. `cantidad`, `unidad` y `presentacion` conservan lo que se ingresó (1 caja, 500 g); `movimiento` conserva lo usado (factor, conversión, cantidad base), de modo que cambiar después una presentación o una equivalencia no lo reescribe.
+- **Entrada:** si hay `presentacionId`, `cantidad` es el número de presentaciones (1 caja) y no se envía `unidadId`. `motivo` es **obligatorio en las salidas** (texto, hasta 200 caracteres, PROVISIONAL); un consumo **no tiene motivo** y, si llega, se ignora. `nota` es opcional (hasta 500). Cantidad mayor que cero (coma o punto). Los mensajes llegan en `campos` (`productoId`, `cantidad`, `unidadId`, `motivo`, `nota`, `claveIdempotencia`), todos a la vez.
+- **Una sola transacción:** valida → ejecuta el núcleo de movimientos (producto existente, activo y completo; conversión a la unidad base; existencia suficiente) → guarda el movimiento, la existencia y la salida o el consumo **juntos**, o no guarda nada.
+- **Regla obligatoria:** una salida o consumo **mayor a la existencia SIEMPRE se rechaza** (`VALIDACION`, `campos.cantidad` = «No hay cantidad suficiente de «X». Disponible: 5 kg.», propiedad `disponible`): no cambia nada, no crea movimiento ni registro y **nunca** se convierte en ajuste, ingreso ni compra.
+- **Idempotencia:** `claveIdempotencia` de la operación (máx. 80 caracteres). La del movimiento se deriva: `<clave>:1`. Reenviar la misma operación devuelve la original (`repetido: true`, con la existencia actual) sin duplicar, aunque ahora ya no alcanzara la existencia; la misma clave con **otra** operación, o usada en una salida y en un consumo, se rechaza con `OPERACION_DUPLICADA`.
+- **Listados:** `desde` y `hasta` ('AAAA-MM-DD', inclusivos) se cuentan sobre el día de `fechaRegistro` **en hora de Costa Rica**; la más reciente primero. `listarSalidas` nunca trae consumos y `listarConsumos` nunca trae salidas.
+- **Inmutables:** no existen operaciones para editar, anular ni borrar salidas o consumos; se corrigen con movimientos nuevos (V12).
+- **Errores:** un error del movimiento conserva su código y llega con mensajes por campo (`CONVERSION_NO_CONFIGURADA` y `UNIDAD_INCOMPATIBLE` en `campos.unidadId`; producto inexistente en `campos.productoId`).
+- **No incluye costos del consumo** (V8) ni recetas (V14).
+- Reglas puras en `src/nucleo/datos/salidas.js`, reutilizables por cualquier adaptador. En el demo, movimientos, existencias, salidas y consumos viven en la misma clave de `sessionStorage` para confirmarse con una sola escritura.
+- **Para la base real:** las tablas `salidas` y `consumos` con `clave_idempotencia` única y sin `UPDATE`/`DELETE`; el movimiento, la actualización de la existencia y el registro de la salida o el consumo dentro de la **misma transacción**, con el mismo bloqueo de fila o actualización condicional que `registrarMovimiento`.
+
 ## 3. Secciones previstas (se agregan al construir cada módulo)
-_(Las versiones 2, 3 y 4 ya están en las secciones 2.2 a 2.6; ver `ESTADO_V2.md`, `ESTADO_V3.md` y `ESTADO_V4.md`.)_
+_(Las versiones 2 a 6 ya están en las secciones 2.2 a 2.8; ver `ESTADO_V2.md` a `ESTADO_V6.md`.)_
 
 | Versión | Sección | Operaciones |
 |---|---|---|
 | 3 | `unidades`, `presentaciones` y `conversiones` (hechas) | CRUD de cada una; `convertir(productoId, cantidad, origen, destino)` → `{cantidad, factor, conversionId, ...}` o error `ConversionNoConfigurada` |
 | 4 | `inventario` (hecha) | `registrarMovimiento(entrada)`, `listarExistencias`, `obtenerExistencia`, `verificarConsistencia()`, `alCambiarInventario` (sección 2.6) |
 | 5 | `compras` (hecha) | `registrarCompra`, `listarCompras`, `obtenerCompra` (ver 2.7) |
-| 6 | `salidas`, `consumos` | `registrarSalida`, `registrarConsumo`, `listar` |
+| 6 | `salidas`, `consumos` (hechas) | `registrarSalida`, `registrarConsumo`, `listarSalidas`, `listarConsumos`, `obtenerSalida`, `obtenerConsumo` (ver 2.8) |
 | 7 | `movimientos` | `listar({productoId, desde, hasta, tipo, subtipo, pagina})`, `obtener(id)`, `consolidado({desde, hasta})` |
 | 8 | `gastos`, `costos` | `registrarGasto`, `listarGastos`, `historialCostosAdquisicion(productoId)` |
 | 9–10 | `reportes` | `inventarioAlCierre(mes)`, `resumenMovimientos(mes)`, `comprasMensuales(mes)`, `gastosMensuales(mes)`, `consumoMensual(mes)`, `costosMensuales(mes)` |

@@ -37,8 +37,11 @@ Todas las tablas incluyen `creado_en` y, cuando aplica, `creado_por` y `actualiz
 - Cada línea genera exactamente un movimiento (`ingreso` / `compra`, `referencia_tipo = 'compra'`, `referencia_id` = compra) con clave `<clave de la compra>:<n>`. Compra, líneas, movimientos y existencias se confirman en **una** transacción.
 
 ## Versión 6 — salidas y consumos
-- **salidas:** id, movimiento_id, motivo, nota.
-- **consumos:** id, movimiento_id, nota, costo_importe decimal(14,2) (nulo), costo_origen (`manual`).
+**Construida en la V6** (ver `ESTADO_V6.md`). Salida y consumo son conceptos distintos: dos tablas, dos servicios. Cada operación genera exactamente un movimiento (tipo `salida`; subtipo `salida_general` o `consumo`).
+- **salidas:** id, movimiento_id (único), motivo (texto, obligatorio, hasta 200), nota (nulo), fecha_registro (servidor), **clave_idempotencia (única)**.
+- **consumos:** id, movimiento_id (único), nota (nulo), fecha_registro (servidor), **clave_idempotencia (única)**. **Sin motivo.**
+- `costo_importe` y `costo_origen` del consumo **no se crean todavía**: se agregan en la V8 (el plan indica que el costo llega entonces).
+- El movimiento generado lleva `referencia_tipo` = `salida` o `consumo` y `referencia_id` = id del registro. Inmutables: sin `UPDATE` ni `DELETE`.
 
 ## Versión 8 — gastos
 - **gastos:** id, fecha_gasto, concepto, importe decimal(14,2), producto_id (opcional), compra_id (opcional), nota.
