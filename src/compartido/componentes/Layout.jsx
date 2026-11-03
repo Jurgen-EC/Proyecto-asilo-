@@ -1,4 +1,4 @@
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAutenticacion } from '../../nucleo/autenticacion/ContextoAutenticacion.jsx';
 import { MODULOS } from '../../nucleo/modulos.js';
 import { useNotificaciones } from './Notificaciones.jsx';
@@ -8,6 +8,7 @@ export default function Layout() {
   const { usuario, cerrarSesion, esDemo } = useAutenticacion();
   const notificaciones = useNotificaciones();
   const navegar = useNavigate();
+  const { pathname } = useLocation();
 
   async function salir() {
     try {
@@ -36,7 +37,12 @@ export default function Layout() {
           <NavLink to="/" end className={({ isActive }) => `menu__enlace ${isActive ? 'menu__enlace--activo' : ''}`}>Inicio</NavLink>
           {MODULOS.map((m) =>
             m.estado === 'disponible' ? (
-              <NavLink key={m.id} to={m.ruta} className={({ isActive }) => `menu__enlace ${isActive ? 'menu__enlace--activo' : ''}`}>{m.nombre}</NavLink>
+              <NavLink
+                key={m.id} to={m.ruta}
+                className={({ isActive }) => `menu__enlace ${isActive || (m.rutasExtra ?? []).some((r) => pathname === r || pathname.startsWith(`${r}/`)) ? 'menu__enlace--activo' : ''}`}
+              >
+                {m.nombre}
+              </NavLink>
             ) : (
               <span key={m.id} className="menu__enlace menu__enlace--deshabilitado" aria-disabled="true">
                 {m.nombre}<small>Próximamente</small>
