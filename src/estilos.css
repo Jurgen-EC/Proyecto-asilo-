@@ -193,3 +193,11 @@ a:focus-visible, select:focus-visible, button:focus-visible, .tarjeta--enlace:fo
 .resumen-errores { border: 2px solid var(--error); border-radius: 12px; padding: .75rem 1rem; color: var(--error); }
 .resumen-errores ul { margin: .4rem 0 0; padding-left: 1.2rem; }
 .formulario-compra textarea { font: inherit; padding: .6rem .75rem; border: 1px solid var(--borde); border-radius: 8px; background: var(--superficie); color: var(--texto); }
+
+/* ---- Salidas y consumos (Versión 6) ---- */
+.subnavegacion { display: flex; gap: .5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+.subnavegacion__enlace { padding: .5rem 1rem; border: 1px solid var(--borde); border-radius: 999px; color: var(--texto); text-decoration: none; min-height: 44px; display: inline-flex; align-items: center; background: var(--superficie); }
+.subnavegacion__enlace:hover { background: var(--menu-activo); }
+.subnavegacion__enlace--activo { background: var(--menu-activo); font-weight: 700; border-color: var(--primario); }
+.existencia-disponible { margin: 0; padding: .6rem .8rem; border: 1px solid var(--borde); border-radius: 8px; background: var(--fondo); }
+

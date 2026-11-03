@@ -8,8 +8,10 @@ import ModuloProductos from './modulos/productos/ModuloProductos.jsx';
 import PaginaUnidades from './modulos/unidades/PaginaUnidades.jsx';
 import PaginaInventario from './modulos/inventario/PaginaInventario.jsx';
 import ModuloCompras from './modulos/compras/ModuloCompras.jsx';
+import ModuloSalidas from './modulos/salidas/ModuloSalidas.jsx';
+import ModuloConsumos from './modulos/salidas/ModuloConsumos.jsx';
 
-// Aquí se registran las rutas de cada módulo al construirlo (Versión 6 en adelante).
+// Aquí se registran las rutas de cada módulo al construirlo (Versión 7 en adelante).
 export default function App() {
   return (
     <Routes>
@@ -21,6 +23,8 @@ export default function App() {
           <Route path="unidades" element={<PaginaUnidades />} />
           <Route path="inventario" element={<PaginaInventario />} />
           <Route path="compras/*" element={<ModuloCompras />} />
+          <Route path="salidas/*" element={<ModuloSalidas />} />
+          <Route path="consumos/*" element={<ModuloConsumos />} />
         </Route>
       </Route>
       <Route path="/inicio" element={<Navigate to="/" replace />} />

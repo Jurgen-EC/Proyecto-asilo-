@@ -88,6 +88,24 @@
  *     obtenerCompra(id) -> Promise<Compra con lineas enriquecidas (producto, unidad, presentacion, movimiento generado)>   // NO_ENCONTRADO
  *   }                                 // No existe editar ni eliminar compras: una compra confirmada no se edita (se corrige en la V12).
  *
+ *   salidas: {                     // Versión 6. Todas exigen sesión (SIN_SESION). Una salida = UN producto y UN movimiento (tipo 'salida', subtipo 'salida_general').
+ *     registrarSalida({ productoId, cantidad, unidadId | presentacionId, motivo, nota?, claveIdempotencia })
+ *         -> Promise<{ salida: Salida, existencia, repetido }>
+ *         // UNA sola transacción por el mismo núcleo que registrarMovimiento. Una salida mayor a la existencia se rechaza (VALIDACION con
+ *         // campos.cantidad y `disponible`), no guarda nada y NUNCA se convierte en ajuste ni ingreso. Idempotente por claveIdempotencia.
+ *         // Errores: VALIDACION (campos: productoId, cantidad, unidadId, motivo, nota), NO_ENCONTRADO, CONVERSION_NO_CONFIGURADA,
+ *         // UNIDAD_INCOMPATIBLE, OPERACION_DUPLICADA (clave reutilizada con otra operación)
+ *     listarSalidas({ desde, hasta, productoId, pagina, tamanoPagina }) -> Promise<{ items: Salida[], total, pagina, tamanoPagina, totalPaginas }>
+ *         // desde/hasta 'AAAA-MM-DD' (día de registro en hora de Costa Rica), inclusivos; más reciente primero; solo salidas (nunca consumos)
+ *     obtenerSalida(id) -> Promise<Salida>   // NO_ENCONTRADO
+ *   }                                 // No existe editar ni eliminar salidas: se corrigen con movimientos nuevos (V12).
+ *
+ *   consumos: {                    // Versión 6. Misma forma que salidas, pero SIN motivo. Movimiento tipo 'salida', subtipo 'consumo'. El costo llega en la V8.
+ *     registrarConsumo({ productoId, cantidad, unidadId | presentacionId, nota?, claveIdempotencia }) -> Promise<{ consumo: Consumo, existencia, repetido }>
+ *     listarConsumos({ desde, hasta, productoId, pagina, tamanoPagina })  -> Promise<{ items: Consumo[], total, pagina, tamanoPagina, totalPaginas }>
+ *     obtenerConsumo(id)                                                   -> Promise<Consumo>   // NO_ENCONTRADO
+ *   }
+ *
  * Usuario:  { id: string, correo: string, nombre: string }
  * Producto: { id, nombre, nombreNormalizado, activo, unidadBaseId (obligatoria desde la V3; null = INCOMPLETO),
  *             creadoEn, actualizadoEn (ISO), creadoPor (id del usuario) }
@@ -101,6 +119,9 @@
  * Compra:   { id, fechaCompra ('AAAA-MM-DD', elegida por el usuario, no futura), registradaEn (ISO, del servidor), usuarioId, nota, total (texto, 2 decimales) }
  * LineaCompra: { id, compraId, productoId, presentacionId (o null), cantidad, unidadId, costoUnitario, costoTotal (textos, 2 decimales), movimientoId }
  * Reglas de las compras (costos, fecha, validación por línea): ver compras.js
+ * Salida:   { id, movimientoId, motivo, nota, fechaRegistro (ISO, del servidor), usuarioId, producto: {id, nombre}, cantidad (la ingresada, en su unidad
+ *             o presentación), unidad, presentacion (o null), movimiento: { id, tipo, subtipo, cantidadBase, unidadBase, factorAplicado, conversionId,
+ *             redondeado, fechaHora } }.  Consumo: igual pero SIN motivo.  Reglas puras: salidas.js
  * Conversion: { id, productoId (null = general), unidadOrigenId, unidadDestinoId, factor (1 origen = factor destino), vigente,
  *               sugerida, reemplazaId, reemplazadaPorId, creadoEn, creadoPor }.  Reglas y función de cálculo: conversiones.js
  * Movimiento: { id, productoId, tipo, subtipo, sentido (1 | -1), cantidadOriginal, unidadOriginalId, presentacionOriginalId (o null),
@@ -116,6 +137,8 @@ const SECCIONES_REQUERIDAS = {
   productos: ['crearProducto', 'editarProducto', 'obtenerProducto', 'listarProductos', 'cambiarEstadoProducto'],
   unidades: ['crearUnidad', 'editarUnidad', 'obtenerUnidad', 'listarUnidades', 'cambiarEstadoUnidad'],
   compras: ['registrarCompra', 'listarCompras', 'obtenerCompra'],
+  salidas: ['registrarSalida', 'listarSalidas', 'obtenerSalida'],
+  consumos: ['registrarConsumo', 'listarConsumos', 'obtenerConsumo'],
   conversiones: ['crearConversion', 'cambiarFactorConversion', 'retirarConversion', 'obtenerConversion', 'listarConversiones', 'convertir'],
   presentaciones: ['crearPresentacion', 'editarPresentacion', 'obtenerPresentacion', 'listarPresentaciones', 'cambiarEstadoPresentacion'],
   inventario: ['registrarMovimiento', 'listarExistencias', 'obtenerExistencia', 'verificarConsistencia', 'alCambiarInventario'],

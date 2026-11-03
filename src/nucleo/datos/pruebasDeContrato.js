@@ -1503,5 +1503,381 @@ export function ejecutarPruebasDeContrato(nombre, crearAdaptador, credenciales, 
         });
       }
     });
+    describe('salidas y consumos (Versión 6)', () => {
+      const dia = (desplazamiento) => {
+        const d = new Date(`${hoyEnCostaRica()}T12:00:00Z`);
+        d.setUTCDate(d.getUTCDate() + desplazamiento);
+        return d.toISOString().slice(0, 10);
+      };
+
+      async function preparar() {
+        const a = crearAdaptador();
+        const usuario = await a.autenticacion.iniciarSesion(credenciales.correo, credenciales.clave);
+        const unidades = await a.unidades.listarUnidades();
+        const por = Object.fromEntries(unidades.map((u) => [u.abreviatura, u]));
+        const papa = await a.productos.crearProducto({ nombre: 'Papa', unidadBaseId: por.kg.id });
+        const arroz = await a.productos.crearProducto({ nombre: 'Arroz', unidadBaseId: por.kg.id });
+        let contador = 0;
+        const clave = () => `op-${++contador}-${Math.random().toString(36).slice(2, 10)}`;
+        const ingresar = (producto, cantidad, extra = {}) => a.inventario.registrarMovimiento({
+          productoId: producto.id, tipo: 'ingreso', subtipo: 'compra', cantidad, unidadId: producto.unidadBaseId, claveIdempotencia: clave(), ...extra,
+        });
+        const existencia = async (producto) => (await a.inventario.obtenerExistencia(producto.id)).cantidadBase;
+        const salida = (producto, cantidad, extra = {}) => a.salidas.registrarSalida({
+          productoId: producto.id, cantidad, unidadId: producto.unidadBaseId, motivo: 'Donación', claveIdempotencia: clave(), ...extra,
+        });
+        const consumo = (producto, cantidad, extra = {}) => a.consumos.registrarConsumo({
+          productoId: producto.id, cantidad, unidadId: producto.unidadBaseId, claveIdempotencia: clave(), ...extra,
+        });
+        return { a, usuario, por, papa, arroz, clave, ingresar, existencia, salida, consumo };
+      }
+
+      const CLASES = [
+        { clase: 'salida', seccion: 'salidas', subtipo: 'salida_general', registrar: 'registrarSalida', listar: 'listarSalidas', obtener: 'obtenerSalida', operacion: (b) => b.salida },
+        { clase: 'consumo', seccion: 'consumos', subtipo: 'consumo', registrar: 'registrarConsumo', listar: 'listarConsumos', obtener: 'obtenerConsumo', operacion: (b) => b.consumo },
+      ];
+
+      for (const c of CLASES) {
+        describe(`${c.clase}: descuenta existencias por la función central`, () => {
+          it('exige sesión en todas las operaciones', async () => {
+            const a = crearAdaptador();
+            await expect(a[c.seccion][c.registrar]({ productoId: 'x', cantidad: 1, unidadId: 'u', motivo: 'm', claveIdempotencia: 'k' })).rejects.toMatchObject({ codigo: 'SIN_SESION' });
+            await expect(a[c.seccion][c.listar]()).rejects.toMatchObject({ codigo: 'SIN_SESION' });
+            await expect(a[c.seccion][c.obtener]('x')).rejects.toMatchObject({ codigo: 'SIN_SESION' });
+          });
+
+          it('no ofrece operaciones para editar, anular ni borrar: se corrige con movimientos nuevos', async () => {
+            const { a } = await preparar();
+            const sufijo = c.clase === 'salida' ? 'Salida' : 'Consumo';
+            for (const verbo of ['editar', 'modificar', 'actualizar', 'eliminar', 'borrar', 'anular']) expect(a[c.seccion][`${verbo}${sufijo}`]).toBeUndefined();
+          });
+
+          it('con existencia 10, descontar 6 deja 4, genera UN movimiento de tipo salida y lo deja trazable', async () => {
+            const b = await preparar();
+            const { a, papa, usuario, ingresar, existencia } = b;
+            await ingresar(papa, 10);
+            const r = await c.operacion(b)(papa, 6, { nota: '  Para el almuerzo  ' });
+            expect(r.repetido).toBe(false);
+            expect(r.existencia).toMatchObject({ productoId: papa.id, cantidadBase: '4' });
+            expect(r[c.clase]).toMatchObject({
+              id: expect.any(String), movimientoId: expect.any(String), nota: 'Para el almuerzo', usuarioId: usuario.id,
+              producto: { id: papa.id, nombre: 'Papa' }, cantidad: '6', unidad: { abreviatura: 'kg' }, presentacion: null,
+              movimiento: { id: r[c.clase].movimientoId, tipo: 'salida', subtipo: c.subtipo, cantidadBase: '6', unidadBase: { abreviatura: 'kg' }, factorAplicado: '1', conversionId: null, redondeado: false },
+            });
+            expect(Math.abs(Date.now() - Date.parse(r[c.clase].fechaRegistro))).toBeLessThan(60_000);
+            expect(await existencia(papa)).toBe('4');
+            expect(await a[c.seccion][c.obtener](r[c.clase].id)).toEqual(r[c.clase]);
+            expect(await a.inventario.verificarConsistencia()).toMatchObject({ consistente: true, movimientosRevisados: 2 });
+            if (c.clase === 'salida') expect(r.salida.motivo).toBe('Donación');
+            else expect('motivo' in r.consumo).toBe(false);
+          });
+
+          it('con existencia 5, una cantidad de 6 se rechaza: la existencia sigue en 5 y no hay movimiento ni registro', async () => {
+            const b = await preparar();
+            const { a, papa, ingresar, existencia } = b;
+            await ingresar(papa, 5);
+            const rechazo = await c.operacion(b)(papa, 6).catch((e) => e);
+            expect(rechazo).toMatchObject({
+              codigo: 'VALIDACION', disponible: '5', campos: { cantidad: expect.stringMatching(/No hay cantidad suficiente.*Disponible: 5 kg/) },
+            });
+            expect(await existencia(papa)).toBe('5');
+            expect(await a.inventario.verificarConsistencia()).toMatchObject({ consistente: true, movimientosRevisados: 1 });
+            expect((await a[c.seccion][c.listar]()).total).toBe(0);
+          });
+
+          it('sin existencia no se puede descontar nada, y la operación rechazada no se convierte en ajuste ni ingreso', async () => {
+            const b = await preparar();
+            const { a, papa, existencia } = b;
+            await expect(c.operacion(b)(papa, 1)).rejects.toMatchObject({ codigo: 'VALIDACION', disponible: '0' });
+            expect(await existencia(papa)).toBe('0');
+            expect((await a.inventario.verificarConsistencia()).movimientosRevisados).toBe(0);
+            expect((await a[c.seccion][c.listar]()).total).toBe(0);
+          });
+
+          it('se puede descontar justo toda la existencia (queda 0) pero nunca una cantidad de más', async () => {
+            const b = await preparar();
+            const { papa, ingresar, existencia } = b;
+            await ingresar(papa, '2.5');
+            await c.operacion(b)(papa, '2,5');
+            expect(await existencia(papa)).toBe('0');
+            await expect(c.operacion(b)(papa, '0.0001')).rejects.toMatchObject({ codigo: 'VALIDACION' });
+            expect(await existencia(papa)).toBe('0');
+          });
+
+          it('con una presentación: 1 caja de 12 unidades descuenta 12 unidades', async () => {
+            const b = await preparar();
+            const { a, por, ingresar, existencia } = b;
+            const huevos = await a.productos.crearProducto({ nombre: 'Huevos', unidadBaseId: por.u.id });
+            const caja = await a.presentaciones.crearPresentacion(huevos.id, { nombre: 'Caja', unidadId: por.u.id, cantidadContenida: '12' });
+            await ingresar(huevos, 3, { unidadId: undefined, presentacionId: caja.id }); // 36 unidades
+            expect(await existencia(huevos)).toBe('36');
+            const r = await c.operacion(b)(huevos, 1, { unidadId: undefined, presentacionId: caja.id });
+            expect(r[c.clase]).toMatchObject({
+              cantidad: '1', presentacion: { id: caja.id, nombre: 'Caja' }, unidad: { abreviatura: 'u' },
+              movimiento: { cantidadBase: '12', factorAplicado: '12', unidadBase: { abreviatura: 'u' } },
+            });
+            expect(r.existencia.cantidadBase).toBe('24');
+            expect(await existencia(huevos)).toBe('24');
+          });
+
+          it('en otra unidad se convierte: 500 g de un producto en kg descuentan 0,5 kg', async () => {
+            const b = await preparar();
+            const { papa, por, ingresar, existencia } = b;
+            await ingresar(papa, 2);
+            const r = await c.operacion(b)(papa, 500, { unidadId: por.g.id });
+            expect(r[c.clase].movimiento).toMatchObject({ cantidadBase: '0.5', factorAplicado: '0.001', conversionId: expect.any(String) });
+            expect(r[c.clase]).toMatchObject({ cantidad: '500', unidad: { abreviatura: 'g' } });
+            expect(await existencia(papa)).toBe('1.5');
+          });
+
+          it('sin equivalencia configurada nunca se asume una: se rechaza con el mensaje en el campo de la unidad y no se registra nada', async () => {
+            const b = await preparar();
+            const { a, papa, por, ingresar } = b;
+            await ingresar(papa, 5);
+            const libra = await a.unidades.crearUnidad({ nombre: 'Libra', abreviatura: 'lb', dimension: 'masa' });
+            await expect(c.operacion(b)(papa, 1, { unidadId: libra.id })).rejects.toMatchObject({ codigo: 'CONVERSION_NO_CONFIGURADA', campos: { unidadId: expect.any(String) } });
+            await expect(c.operacion(b)(papa, 1, { unidadId: por.l.id })).rejects.toMatchObject({ codigo: 'UNIDAD_INCOMPATIBLE', campos: { unidadId: expect.any(String) } });
+            expect((await a[c.seccion][c.listar]()).total).toBe(0);
+            expect((await a.inventario.verificarConsistencia()).movimientosRevisados).toBe(1);
+          });
+
+          it('idempotencia: la misma clave dos veces registra una sola operación y descuenta una sola vez', async () => {
+            const b = await preparar();
+            const { a, papa, ingresar, existencia, clave } = b;
+            await ingresar(papa, 10);
+            const k = clave();
+            const primera = await c.operacion(b)(papa, 6, { claveIdempotencia: k });
+            const segunda = await c.operacion(b)(papa, 6, { claveIdempotencia: k });
+            expect(segunda.repetido).toBe(true);
+            expect(segunda[c.clase]).toEqual(primera[c.clase]);
+            expect(await existencia(papa)).toBe('4');
+            expect((await a[c.seccion][c.listar]()).total).toBe(1);
+            expect(await a.inventario.verificarConsistencia()).toMatchObject({ consistente: true, movimientosRevisados: 2 });
+          });
+
+          it('idempotencia: un reintento devuelve el resultado original aunque ahora ya no alcance la existencia', async () => {
+            const b = await preparar();
+            const { papa, ingresar, existencia, clave } = b;
+            await ingresar(papa, 10);
+            const k = clave();
+            const original = await c.operacion(b)(papa, 6, { claveIdempotencia: k });
+            const reintento = await c.operacion(b)(papa, 6, { claveIdempotencia: k });
+            expect(reintento.repetido).toBe(true);
+            expect(reintento[c.clase].id).toBe(original[c.clase].id);
+            expect(await existencia(papa)).toBe('4'); // no se descontó otra vez
+          });
+
+          it('la misma clave para una operación DISTINTA se rechaza (OPERACION_DUPLICADA) sin registrar nada', async () => {
+            const b = await preparar();
+            const { a, papa, ingresar, existencia, clave } = b;
+            await ingresar(papa, 10);
+            const k = clave();
+            await c.operacion(b)(papa, 3, { claveIdempotencia: k });
+            await expect(c.operacion(b)(papa, 4, { claveIdempotencia: k })).rejects.toMatchObject({ codigo: 'OPERACION_DUPLICADA' });
+            await expect(c.operacion(b)(papa, 3, { claveIdempotencia: k, nota: 'otra nota' })).rejects.toMatchObject({ codigo: 'OPERACION_DUPLICADA' });
+            expect(await existencia(papa)).toBe('7');
+            expect((await a[c.seccion][c.listar]()).total).toBe(1);
+          });
+
+          it('valida la entrada y avisa todos los campos con problema a la vez, sin registrar nada', async () => {
+            const b = await preparar();
+            const { a, papa, ingresar } = b;
+            await ingresar(papa, 10);
+            const casos = [
+              [{ productoId: undefined }, 'productoId'],
+              [{ cantidad: '' }, 'cantidad'], [{ cantidad: 0 }, 'cantidad'], [{ cantidad: '-3' }, 'cantidad'], [{ cantidad: 'abc' }, 'cantidad'],
+              [{ unidadId: undefined }, 'unidadId'], [{ presentacionId: 'p-1' }, 'unidadId'],
+              [{ nota: 'x'.repeat(501) }, 'nota'], [{ claveIdempotencia: '' }, 'claveIdempotencia'], [{ claveIdempotencia: 'x'.repeat(81) }, 'claveIdempotencia'],
+              ...(c.clase === 'salida' ? [[{ motivo: '' }, 'motivo'], [{ motivo: '   ' }, 'motivo'], [{ motivo: 'x'.repeat(201) }, 'motivo']] : []),
+            ];
+            for (const [cambio, campo] of casos) {
+              await expect(c.operacion(b)(papa, 1, cambio)).rejects.toMatchObject({ codigo: 'VALIDACION', campos: { [campo]: expect.any(String) } });
+            }
+            const varios = await a[c.seccion][c.registrar]({}).catch((e) => e);
+            expect(Object.keys(varios.campos)).toEqual(expect.arrayContaining(['productoId', 'unidadId', 'cantidad', 'claveIdempotencia', ...(c.clase === 'salida' ? ['motivo'] : [])]));
+            expect((await a[c.seccion][c.listar]()).total).toBe(0);
+            expect((await a.inventario.verificarConsistencia()).movimientosRevisados).toBe(1);
+          });
+
+          it('un producto inexistente o inactivo no admite la operación', async () => {
+            const b = await preparar();
+            const { a, papa, ingresar } = b;
+            await ingresar(papa, 5);
+            await expect(c.operacion(b)({ id: 'no-existe', unidadBaseId: papa.unidadBaseId }, 1)).rejects.toMatchObject({ codigo: 'NO_ENCONTRADO', campos: { productoId: expect.any(String) } });
+            await a.productos.cambiarEstadoProducto(papa.id, false);
+            await expect(c.operacion(b)(papa, 1)).rejects.toMatchObject({ codigo: 'VALIDACION', campos: { productoId: expect.stringMatching(/inactivo/) } });
+            expect((await a[c.seccion][c.listar]()).total).toBe(0);
+          });
+
+          it('dos operaciones simultáneas de 3 con existencia 5: solo una se acepta', async () => {
+            const b = await preparar();
+            const { a, papa, ingresar, existencia } = b;
+            await ingresar(papa, 5);
+            const resultados = await Promise.allSettled([c.operacion(b)(papa, 3), c.operacion(b)(papa, 3)]);
+            expect(resultados.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+            expect(resultados.find((r) => r.status === 'rejected').reason).toMatchObject({ codigo: 'VALIDACION', disponible: '2' });
+            expect(await existencia(papa)).toBe('2');
+            expect((await a[c.seccion][c.listar]()).total).toBe(1);
+            expect((await a.inventario.verificarConsistencia()).consistente).toBe(true);
+          });
+
+          it('dos conexiones distintas con operaciones simultáneas de 3 sobre existencia 5: solo una se acepta', async () => {
+            const b = await preparar();
+            const { a, papa, ingresar, existencia, clave } = b;
+            await ingresar(papa, 5);
+            const otra = crearAdaptador(); // segunda conexión al mismo almacén de datos
+            await otra.autenticacion.iniciarSesion(credenciales.correo, credenciales.clave);
+            const entrada = () => ({ productoId: papa.id, cantidad: 3, unidadId: papa.unidadBaseId, motivo: 'Donación', claveIdempotencia: clave() });
+            const resultados = await Promise.allSettled([a[c.seccion][c.registrar](entrada()), otra[c.seccion][c.registrar](entrada())]);
+            expect(resultados.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+            expect(await existencia(papa)).toBe('2');
+          });
+
+          it('listar: la más reciente primero, filtra por producto y por día, valida las fechas y pagina', async () => {
+            const b = await preparar();
+            const { a, papa, arroz, ingresar } = b;
+            await ingresar(papa, 100);
+            await ingresar(arroz, 100);
+            await c.operacion(b)(papa, 1);
+            await c.operacion(b)(arroz, 2);
+            await c.operacion(b)(papa, 3);
+            const cantidades = (r) => r.items.map((x) => x.cantidad);
+            const listar = (q) => a[c.seccion][c.listar](q);
+            expect(cantidades(await listar())).toEqual(['3', '2', '1']);
+            expect(cantidades(await listar({ productoId: papa.id }))).toEqual(['3', '1']);
+            expect(cantidades(await listar({ desde: dia(0), hasta: dia(0) }))).toEqual(['3', '2', '1']);
+            expect((await listar({ desde: dia(1) })).total).toBe(0);
+            expect((await listar({ hasta: dia(-1) })).total).toBe(0);
+            await expect(listar({ desde: dia(1), hasta: dia(0) })).rejects.toMatchObject({ codigo: 'VALIDACION', campos: { hasta: expect.any(String) } });
+            await expect(listar({ desde: '2026-13-40' })).rejects.toMatchObject({ codigo: 'VALIDACION', campos: { desde: expect.any(String) } });
+            await expect(listar({ productoId: 'no-existe' })).rejects.toMatchObject({ codigo: 'NO_ENCONTRADO' });
+            const pagina2 = await listar({ pagina: 2, tamanoPagina: 2 });
+            expect(pagina2).toMatchObject({ total: 3, pagina: 2, tamanoPagina: 2, totalPaginas: 2 });
+            expect(cantidades(pagina2)).toEqual(['1']);
+          });
+
+          it('obtener un id inexistente lanza NO_ENCONTRADO', async () => {
+            const { a } = await preparar();
+            await expect(a[c.seccion][c.obtener]('no-existe')).rejects.toMatchObject({ codigo: 'NO_ENCONTRADO' });
+          });
+
+          it('lo que devuelve el adaptador son copias: modificarlas no altera lo guardado', async () => {
+            const b = await preparar();
+            const { a, papa, ingresar } = b;
+            await ingresar(papa, 10);
+            const r = await c.operacion(b)(papa, 2);
+            r[c.clase].nota = 'alterada';
+            r[c.clase].movimiento.cantidadBase = '999';
+            const guardada = await a[c.seccion][c.obtener](r[c.clase].id);
+            expect(guardada.nota).toBeNull();
+            expect(guardada.movimiento.cantidadBase).toBe('2');
+          });
+        });
+      }
+
+      describe('salida y consumo son conceptos distintos', () => {
+        it('cada uno aparece solo en su propio listado, con su propio subtipo, y ambos descuentan la misma existencia', async () => {
+          const { a, papa, ingresar, existencia, salida, consumo } = await preparar();
+          await ingresar(papa, 10);
+          const s = await salida(papa, 2, { motivo: 'Donación al comedor vecino' });
+          const k = await consumo(papa, 3);
+          const salidas = await a.salidas.listarSalidas();
+          const consumos = await a.consumos.listarConsumos();
+          expect(salidas.items.map((x) => x.id)).toEqual([s.salida.id]);
+          expect(consumos.items.map((x) => x.id)).toEqual([k.consumo.id]);
+          expect(salidas.items[0]).toMatchObject({ motivo: 'Donación al comedor vecino', movimiento: { tipo: 'salida', subtipo: 'salida_general' } });
+          expect(consumos.items[0].movimiento).toMatchObject({ tipo: 'salida', subtipo: 'consumo' });
+          expect('motivo' in consumos.items[0]).toBe(false);
+          await expect(a.salidas.obtenerSalida(k.consumo.id)).rejects.toMatchObject({ codigo: 'NO_ENCONTRADO' });
+          await expect(a.consumos.obtenerConsumo(s.salida.id)).rejects.toMatchObject({ codigo: 'NO_ENCONTRADO' });
+          expect(await existencia(papa)).toBe('5');
+          expect(await a.inventario.verificarConsistencia()).toMatchObject({ consistente: true, movimientosRevisados: 3 });
+        });
+
+        it('con existencia 5, un consumo de 2 deja 3 y aparece en los consumos de ese producto', async () => {
+          const { a, papa, arroz, ingresar, existencia, consumo } = await preparar();
+          await ingresar(papa, 5);
+          await ingresar(arroz, 5);
+          await consumo(papa, 2);
+          await consumo(arroz, 1);
+          expect(await existencia(papa)).toBe('3');
+          const delProducto = await a.consumos.listarConsumos({ productoId: papa.id });
+          expect(delProducto.items).toHaveLength(1);
+          expect(delProducto.items[0]).toMatchObject({ cantidad: '2', producto: { id: papa.id } });
+        });
+
+        it('la misma clave usada en una salida y en un consumo se rechaza: son operaciones distintas', async () => {
+          const { papa, ingresar, existencia, salida, consumo, clave } = await preparar();
+          await ingresar(papa, 10);
+          const k = clave();
+          await salida(papa, 3, { claveIdempotencia: k });
+          await expect(consumo(papa, 3, { claveIdempotencia: k })).rejects.toMatchObject({ codigo: 'OPERACION_DUPLICADA' });
+          expect(await existencia(papa)).toBe('7');
+        });
+
+        it('el motivo es obligatorio en una salida; un consumo no lo tiene y, si llega, se ignora', async () => {
+          const { a, papa, ingresar, consumo } = await preparar();
+          await ingresar(papa, 10);
+          await expect(a.salidas.registrarSalida({ productoId: papa.id, cantidad: 1, unidadId: papa.unidadBaseId, claveIdempotencia: 'sin-motivo' }))
+            .rejects.toMatchObject({ codigo: 'VALIDACION', campos: { motivo: expect.any(String) } });
+          const r = await consumo(papa, 1, { motivo: 'esto no se guarda' });
+          expect('motivo' in r.consumo).toBe(false);
+          expect('motivo' in (await a.consumos.obtenerConsumo(r.consumo.id))).toBe(false);
+        });
+
+        it('alCambiarInventario avisa tras cada salida o consumo aceptado, y no tras uno rechazado', async () => {
+          const { a, papa, ingresar, salida, consumo } = await preparar();
+          await ingresar(papa, 5);
+          const avisos = [];
+          const salir = a.inventario.alCambiarInventario((cambio) => avisos.push(cambio));
+          const s = await salida(papa, 1);
+          const k = await consumo(papa, 1);
+          await expect(salida(papa, 99)).rejects.toBeDefined();
+          await expect(consumo(papa, 99)).rejects.toBeDefined();
+          expect(avisos).toEqual([
+            { productoId: papa.id, movimientoId: s.salida.movimientoId },
+            { productoId: papa.id, movimientoId: k.consumo.movimientoId },
+          ]);
+          salir();
+        });
+
+        it('una salida y un consumo simultáneos nunca dejan la existencia negativa', async () => {
+          const { a, papa, ingresar, existencia, salida, consumo } = await preparar();
+          await ingresar(papa, 5);
+          const pedidos = Array.from({ length: 12 }, (_, i) => (i % 2 === 0 ? salida(papa, 1) : consumo(papa, 1)));
+          const resultados = await Promise.allSettled(pedidos);
+          expect(resultados.filter((r) => r.status === 'fulfilled')).toHaveLength(5);
+          expect(await existencia(papa)).toBe('0');
+          expect((await a.inventario.verificarConsistencia()).consistente).toBe(true);
+        });
+      });
+
+      if (extras.crearConFalloSimulado) {
+        for (const c of CLASES) {
+          it(`atomicidad (${c.clase}): un fallo a mitad de la operación no deja movimiento, registro ni cambio de existencia`, async () => {
+            const { adaptador: a, provocarFallo, restaurar } = extras.crearConFalloSimulado();
+            await a.autenticacion.iniciarSesion(credenciales.correo, credenciales.clave);
+            const kg = (await a.unidades.listarUnidades()).find((u) => u.abreviatura === 'kg');
+            const papa = await a.productos.crearProducto({ nombre: 'Papa', unidadBaseId: kg.id });
+            await a.inventario.registrarMovimiento({ productoId: papa.id, tipo: 'ingreso', subtipo: 'compra', cantidad: 10, unidadId: kg.id, claveIdempotencia: 'a-1' });
+            const entrada = { productoId: papa.id, cantidad: 3, unidadId: kg.id, motivo: 'Donación', claveIdempotencia: 'f-1' };
+
+            provocarFallo();
+            await expect(a[c.seccion][c.registrar](entrada)).rejects.toBeInstanceOf(ErrorDatos);
+            restaurar();
+
+            expect((await a.inventario.obtenerExistencia(papa.id)).cantidadBase).toBe('10');
+            expect((await a[c.seccion][c.listar]()).total).toBe(0);
+            expect(await a.inventario.verificarConsistencia()).toMatchObject({ consistente: true, movimientosRevisados: 1 });
+            // el intento fallido no cuenta como registrado: reintentar con la misma clave lo ejecuta de verdad
+            const reintento = await a[c.seccion][c.registrar](entrada);
+            expect(reintento.repetido).toBe(false);
+            expect((await a.inventario.obtenerExistencia(papa.id)).cantidadBase).toBe('7');
+            expect((await a[c.seccion][c.listar]()).total).toBe(1);
+            expect(await a.inventario.verificarConsistencia()).toMatchObject({ consistente: true, movimientosRevisados: 2 });
+          });
+        }
+      }
+    });
   });
 }
