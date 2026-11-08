@@ -43,6 +43,14 @@ Todas las tablas incluyen `creado_en` y, cuando aplica, `creado_por` y `actualiz
 - `costo_importe` y `costo_origen` del consumo **no se crean todavía**: se agregan en la V8 (el plan indica que el costo llega entonces).
 - El movimiento generado lleva `referencia_tipo` = `salida` o `consumo` y `referencia_id` = id del registro. Inmutables: sin `UPDATE` ni `DELETE`.
 
+## Versión 7 — historial y consolidado (sin tablas nuevas)
+**Construida en la V7** (ver `ESTADO_V7.md`). **No crea tablas ni campos:** solo consulta `movimientos`, `compras`, `salidas`, `consumos`, `productos`, `unidades` y `presentaciones`. Recomendaciones para una base real:
+- **Índices** sobre `movimientos`: (`producto_id`, `fecha_hora`), (`tipo`, `subtipo`, `fecha_hora`) y (`fecha_hora`), para filtrar por producto, tipo, clase y período con miles de movimientos.
+- **Día en hora de Costa Rica:** los filtros `desde` y `hasta` son inclusivos y se cuentan por el día en `America/Costa_Rica` (en PostgreSQL, `(fecha_hora AT TIME ZONE 'America/Costa_Rica')::date`); un índice sobre esa expresión acelera el filtro por período.
+- **Existencia anterior y resultante** de un movimiento: suma de `sentido × cantidad_base` de los movimientos del mismo producto en **orden de registro** (por ejemplo `sum(sentido * cantidad_base) over (partition by producto_id order by secuencia)`). Para que el orden sea estable se recomienda una columna `secuencia` (identidad autoincremental) en `movimientos`, o desempatar por (`fecha_hora`, `id`).
+- **Consolidado:** una sola consulta agrupada por producto con `sum(...) filter (where tipo = ...)`; los ajustes se suman con signo y **no** entran en entradas ni salidas.
+- Todo es de **solo lectura**: el rol que ejecuta estas consultas no necesita permisos de escritura.
+
 ## Versión 8 — gastos
 - **gastos:** id, fecha_gasto, concepto, importe decimal(14,2), producto_id (opcional), compra_id (opcional), nota.
   No existe tabla ni campo de costo promedio: fórmula pendiente de aprobación del hogar.

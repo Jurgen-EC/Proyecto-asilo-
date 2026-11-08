@@ -8,7 +8,7 @@ export const MODULOS = [
   { id: 'inventario',   nombre: 'Inventario',              ruta: '/inventario',   version: 4,  estado: 'disponible', descripcion: 'Existencias actuales' },
   { id: 'compras',      nombre: 'Compras',                 ruta: '/compras',      version: 5,  estado: 'disponible', descripcion: 'Compras e ingresos' },
   { id: 'salidas',      nombre: 'Salidas y consumo',       ruta: '/salidas',      version: 6,  estado: 'disponible', rutasExtra: ['/consumos'], descripcion: 'Salidas y consumos de productos' },
-  { id: 'movimientos',  nombre: 'Movimientos',             ruta: '/movimientos',  version: 7,  estado: 'proximamente', descripcion: 'Historial, ingresos, salidas y consolidado' },
+  { id: 'movimientos',  nombre: 'Movimientos',             ruta: '/movimientos',  version: 7,  estado: 'disponible', descripcion: 'Historial, ingresos, salidas y consolidado' },
   { id: 'costos',       nombre: 'Gastos y costos',         ruta: '/costos',       version: 8,  estado: 'proximamente', descripcion: 'Gastos y costos de adquisición' },
   { id: 'reportes',     nombre: 'Reportes mensuales',      ruta: '/reportes',     version: 9,  estado: 'proximamente', descripcion: 'Inventario, compras, gastos, consumo y costos' },
   { id: 'conteos',      nombre: 'Conteos y ajustes',       ruta: '/conteos',      version: 11, estado: 'proximamente', descripcion: 'Conciliación físico-digital y ajustes' },

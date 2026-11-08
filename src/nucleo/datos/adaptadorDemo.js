@@ -20,6 +20,9 @@ import {
 } from './salidas.js';
 import { hoyEnCostaRica } from '../../compartido/utilidades/formato.js';
 import {
+  normalizarConsultaMovimientos, filtrarMovimientos, consolidarMovimientos as consolidar, existenciaAlMovimiento,
+} from './movimientos.js';
+import {
   validarUnidad, detectarUnidadDuplicada, errorUnidadDuplicada, filtrarUnidades,
   UNIDADES_SUGERIDAS, ESTADOS_UNIDAD, CONVERSIONES_GENERALES_SUGERIDAS,
 } from './unidades.js';
@@ -396,6 +399,44 @@ export function crearAdaptadorDemo({ almacen = crearAlmacen(), retardoMs = 150, 
     return paginar(filtradas, pagina, tamanoPagina);
   }
 
+  // HISTORIAL DE MOVIMIENTOS (V7): solo lectura. Une cada movimiento con su producto, sus unidades y su origen.
+  const nombreDeUsuario = (id) => (id === USUARIO_DEMO.id ? USUARIO_DEMO.nombre : null); // en la base real, de la tabla de usuarios
+  function crearVistaDeMovimiento() {
+    const productos = new Map(leerProductos().map((p) => [p.id, p]));
+    const unidades = new Map(leerUnidades().map((u) => [u.id, u]));
+    const presentaciones = new Map(leerPresentaciones().map((p) => [p.id, p]));
+    const resumenUnidad = (id) => { const u = unidades.get(id); return u ? { id: u.id, nombre: u.nombre, abreviatura: u.abreviatura } : null; };
+    return (m) => ({
+      id: m.id, fechaHora: m.fechaHora, tipo: m.tipo, subtipo: m.subtipo, sentido: m.sentido,
+      producto: { id: m.productoId, nombre: productos.get(m.productoId)?.nombre ?? '' },
+      // La cantidad conserva lo USADO al registrar (unidad o presentación): cambiar después una equivalencia no la reescribe.
+      cantidadOriginal: m.cantidadOriginal, unidad: resumenUnidad(m.unidadOriginalId),
+      presentacion: m.presentacionOriginalId ? { id: m.presentacionOriginalId, nombre: presentaciones.get(m.presentacionOriginalId)?.nombre ?? '' } : null,
+      cantidadBase: m.cantidadBase, unidadBase: resumenUnidad(m.unidadBaseId),
+      referencia: m.referenciaTipo ? { tipo: m.referenciaTipo, id: m.referenciaId } : null,
+      usuario: { id: m.usuarioId, nombre: nombreDeUsuario(m.usuarioId) },
+      nota: m.nota ?? null,
+    });
+  }
+  // El registro que originó el movimiento (compra, salida o consumo), con lo que explica por qué se hizo.
+  function origenDeMovimiento(inventario, m) {
+    if (!m.referenciaTipo) return null;
+    const base = { tipo: m.referenciaTipo, id: m.referenciaId };
+    if (m.referenciaTipo === 'compra') {
+      const c = inventario.compras.find((x) => x.id === m.referenciaId);
+      return c ? { ...base, fechaCompra: c.fechaCompra, nota: c.nota ?? null } : base;
+    }
+    if (m.referenciaTipo === 'salida') {
+      const s = inventario.salidas.find((x) => x.id === m.referenciaId);
+      return s ? { ...base, motivo: s.motivo, nota: s.nota ?? null } : base;
+    }
+    if (m.referenciaTipo === 'consumo') {
+      const c = inventario.consumos.find((x) => x.id === m.referenciaId);
+      return c ? { ...base, nota: c.nota ?? null } : base;
+    }
+    return base;
+  }
+
   function obtenerOperacion(clase, id) {
     const inventario = leerInventario();
     const registro = listaDe(inventario, clase).find((r) => r.id === id);
@@ -746,6 +787,54 @@ export function crearAdaptadorDemo({ almacen = crearAlmacen(), retardoMs = 150, 
       alCambiarInventario(callback) {
         oyentesInventario.add(callback);
         return () => oyentesInventario.delete(callback);
+      },
+    },
+    movimientos: {
+      // SOLO LECTURA (V7): no modifica nada. Los movimientos son inmutables; las correcciones se hacen con movimientos nuevos (V12).
+      async listarMovimientos(consulta) {
+        await esperar(retardoMs);
+        exigirSesion();
+        const c = normalizarConsultaMovimientos(consulta);
+        if (c.productoId) exigirProducto(leerProductos(), c.productoId); // un producto inactivo sí se puede consultar
+        const { movimientos } = leerInventario();
+        const pagina = paginar(filtrarMovimientos(movimientos, c), c.pagina, c.tamanoPagina);
+        const vista = crearVistaDeMovimiento();
+        return { ...pagina, items: pagina.items.map(vista) }; // la vista solo se arma para la página pedida
+      },
+      async obtenerMovimiento(id) {
+        await esperar(retardoMs);
+        exigirSesion();
+        const inventario = leerInventario();
+        const m = inventario.movimientos.find((x) => x.id === id);
+        if (!m) throw new ErrorDatos(CODIGOS.NO_ENCONTRADO);
+        const existencia = existenciaAlMovimiento(inventario.movimientos, id);
+        return {
+          ...crearVistaDeMovimiento()(m),
+          factorAplicado: m.factorAplicado, conversionId: m.conversionId, redondeado: m.redondeado,
+          existenciaAnterior: existencia.antes, existenciaResultante: existencia.despues,
+          origen: origenDeMovimiento(inventario, m),
+        };
+      },
+      async consolidarMovimientos(consulta) {
+        await esperar(retardoMs);
+        exigirSesion();
+        const { desde, hasta, productoId } = normalizarConsultaMovimientos({ desde: consulta?.desde, hasta: consulta?.hasta, productoId: consulta?.productoId });
+        if (productoId) exigirProducto(leerProductos(), productoId);
+        const { movimientos } = leerInventario();
+        const productos = new Map(leerProductos().map((p) => [p.id, p]));
+        const unidades = new Map(leerUnidades().map((u) => [u.id, u]));
+        const filas = consolidar(movimientos, { desde, hasta, productoId })
+          .map(({ productoId: id, unidadBaseId, ...cifras }) => {
+            const u = unidades.get(unidadBaseId);
+            return {
+              producto: { id, nombre: productos.get(id)?.nombre ?? '' },
+              unidadBase: u ? { id: u.id, nombre: u.nombre, abreviatura: u.abreviatura } : null,
+              ...cifras,
+            };
+          })
+          .sort((a, b) => a.producto.nombre.localeCompare(b.producto.nombre, 'es'));
+        const totalMovimientos = filas.reduce((t, f) => t + f.cantidadEntradas + f.cantidadSalidas + f.cantidadAjustes, 0);
+        return { desde, hasta, filas, totalMovimientos };
       },
     },
     compras: {

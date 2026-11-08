@@ -192,8 +192,28 @@ Todas las operaciones exigen sesión (`SIN_SESION`). **Decisión del equipo (PRO
 - Reglas puras en `src/nucleo/datos/salidas.js`, reutilizables por cualquier adaptador. En el demo, movimientos, existencias, salidas y consumos viven en la misma clave de `sessionStorage` para confirmarse con una sola escritura.
 - **Para la base real:** las tablas `salidas` y `consumos` con `clave_idempotencia` única y sin `UPDATE`/`DELETE`; el movimiento, la actualización de la existencia y el registro de la salida o el consumo dentro de la **misma transacción**, con el mismo bloqueo de fila o actualización condicional que `registrarMovimiento`.
 
+### 2.9 Versión 7: `movimientos` (historial, detalle y consolidado)
+**Solo lectura.** Todas las operaciones exigen sesión (`SIN_SESION`). Los movimientos son inmutables: no existe editar, anular ni eliminar desde esta sección.
+
+| Operación | Resultado | Errores |
+|---|---|---|
+| `listarMovimientos({tipo, subtipo, desde, hasta, productoId, orden, pagina, tamanoPagina})` | `{items: MovimientoVista[], total, pagina, tamanoPagina, totalPaginas}` | `VALIDACION` (`campos.tipo`, `subtipo`, `desde`, `hasta`), `NO_ENCONTRADO` (producto) |
+| `obtenerMovimiento(id)` | `MovimientoDetalle` | `NO_ENCONTRADO` |
+| `consolidarMovimientos({desde, hasta, productoId})` | `{desde, hasta, filas, totalMovimientos}` | `VALIDACION` (`campos.desde`, `hasta`), `NO_ENCONTRADO` (producto) |
+
+- **Filtros de `listarMovimientos`:** `tipo` = `'ingreso'`, `'salida'` o `'ajuste'`; `subtipo` = `'compra'`, `'inventario_inicial'`, `'salida_general'`, `'consumo'`, `'ajuste_conteo'` o `'anulacion'`. Un `subtipo` sin `tipo` deduce el tipo; un `subtipo` que no corresponde al `tipo` es `VALIDACION` (`campos.subtipo`). `desde` y `hasta` son `'AAAA-MM-DD'`, **inclusivos y contados en hora de Costa Rica**; `desde` posterior a `hasta` es `VALIDACION`. `orden` = `'reciente'` (por defecto) o `'antiguo'`. Página de 20 por defecto, hasta 100; una página fuera de rango se acota a la última. Un producto inactivo **sí** se puede consultar.
+- **Orden:** `'reciente'` = el más nuevo primero; a igual fecha y hora, el registrado después va primero.
+- `MovimientoVista`: `{id, fechaHora (ISO), tipo, subtipo, sentido, producto: {id, nombre}, cantidadOriginal (texto), unidad: {id, nombre, abreviatura} | null, presentacion: {id, nombre} | null, cantidadBase, unidadBase, referencia: {tipo: 'compra'|'salida'|'consumo', id} | null, usuario: {id, nombre (null si no se conoce)}, nota}`. La cantidad conserva lo **usado al registrar** (unidad o presentación).
+- `MovimientoDetalle` = `MovimientoVista` + `{factorAplicado, conversionId, redondeado, existenciaAnterior, existenciaResultante, origen}`, donde `origen` es `null` (registrado directo), `{tipo: 'compra', id, fechaCompra, nota}`, `{tipo: 'salida', id, motivo, nota}` o `{tipo: 'consumo', id, nota}`. **La clave de idempotencia nunca se expone.**
+- `existenciaAnterior` y `existenciaResultante` son la suma de `sentido × cantidadBase` de los movimientos del mismo producto, **en orden de registro**, justo antes y después de este movimiento (no se guardan en el movimiento).
+- **`consolidarMovimientos`:** devuelve una fila por producto **con movimientos en el período**, ordenadas por nombre: `{producto: {id, nombre}, unidadBase, entradas, salidas, salidasGenerales, consumos, diferencia, ajustes, cantidadEntradas, cantidadSalidas, cantidadAjustes}`. Todas las cantidades van en la **unidad base** del producto, como texto decimal exacto.
+  - `entradas` = suma de los ingresos. `salidas` = `salidasGenerales` + `consumos` (cuentan juntas como Salidas pero se conserva cada subtotal). `diferencia` = `entradas` − `salidas`. `ajustes` = suma con signo de los ajustes: **no cuentan como entradas ni como salidas** (propuesta del plan, PROVISIONAL).
+  - `totalMovimientos` = suma de las tres cantidades de movimientos de todas las filas. No hay total entre productos (unidades distintas).
+  - **Verificable:** cada total coincide con la suma de los movimientos que devuelve `listarMovimientos` con el mismo producto y período (`tipo: 'ingreso'`, `tipo: 'salida'`, `subtipo: 'consumo'`, etc.).
+- Reglas puras reutilizables: `src/nucleo/datos/movimientos.js`. Pruebas de contrato reutilizables: `src/nucleo/datos/pruebasContratoMovimientos.js`.
+
 ## 3. Secciones previstas (se agregan al construir cada módulo)
-_(Las versiones 2 a 6 ya están en las secciones 2.2 a 2.8; ver `ESTADO_V2.md` a `ESTADO_V6.md`.)_
+_(Las versiones 2 a 7 ya están en las secciones 2.2 a 2.9; ver `ESTADO_V2.md` a `ESTADO_V7.md`.)_
 
 | Versión | Sección | Operaciones |
 |---|---|---|
@@ -201,7 +221,7 @@ _(Las versiones 2 a 6 ya están en las secciones 2.2 a 2.8; ver `ESTADO_V2.md` a
 | 4 | `inventario` (hecha) | `registrarMovimiento(entrada)`, `listarExistencias`, `obtenerExistencia`, `verificarConsistencia()`, `alCambiarInventario` (sección 2.6) |
 | 5 | `compras` (hecha) | `registrarCompra`, `listarCompras`, `obtenerCompra` (ver 2.7) |
 | 6 | `salidas`, `consumos` (hechas) | `registrarSalida`, `registrarConsumo`, `listarSalidas`, `listarConsumos`, `obtenerSalida`, `obtenerConsumo` (ver 2.8) |
-| 7 | `movimientos` | `listar({productoId, desde, hasta, tipo, subtipo, pagina})`, `obtener(id)`, `consolidado({desde, hasta})` |
+| 7 | `movimientos` (hecha) | `listarMovimientos`, `obtenerMovimiento`, `consolidarMovimientos` (ver 2.9) |
 | 8 | `gastos`, `costos` | `registrarGasto`, `listarGastos`, `historialCostosAdquisicion(productoId)` |
 | 9–10 | `reportes` | `inventarioAlCierre(mes)`, `resumenMovimientos(mes)`, `comprasMensuales(mes)`, `gastosMensuales(mes)`, `consumoMensual(mes)`, `costosMensuales(mes)` |
 | 11 | `conteos` | `crear`, `registrarCantidadFisica`, `finalizar`, `comparacion(conteoId)` |
