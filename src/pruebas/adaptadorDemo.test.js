@@ -1,6 +1,7 @@
 import { crearAdaptadorDemo, USUARIO_DEMO, CLAVE_DEMO } from '../nucleo/datos/adaptadorDemo.js';
 import { ejecutarPruebasDeContrato } from '../nucleo/datos/pruebasDeContrato.js';
 import { crearDatos } from '../nucleo/datos/index.js';
+import { ejecutarPruebasContratoMovimientos } from '../nucleo/datos/pruebasContratoMovimientos.js';
 
 ejecutarPruebasDeContrato(
   'adaptador demo',
@@ -17,6 +18,12 @@ ejecutarPruebasDeContrato(
       };
     },
   },
+);
+
+ejecutarPruebasContratoMovimientos(
+  'adaptador demo',
+  () => crearAdaptadorDemo({ retardoMs: 0 }),
+  { correo: USUARIO_DEMO.correo, clave: CLAVE_DEMO },
 );
 
 describe('selección de adaptador', () => {

@@ -106,7 +106,29 @@
  *     obtenerConsumo(id)                                                   -> Promise<Consumo>   // NO_ENCONTRADO
  *   }
  *
+ *   movimientos: {                 // Versión 7. SOLO LECTURA. Todas exigen sesión (SIN_SESION). Los movimientos son inmutables.
+ *     listarMovimientos({ tipo, subtipo, desde, hasta, productoId, orden, pagina, tamanoPagina })
+ *         -> Promise<{ items: MovimientoVista[], total, pagina, tamanoPagina, totalPaginas }>
+ *         // tipo: 'ingreso' | 'salida' | 'ajuste'; subtipo: 'compra' | 'inventario_inicial' | 'salida_general' | 'consumo' | 'ajuste_conteo' | 'anulacion'
+ *         // (un subtipo sin tipo deduce el tipo; un subtipo que no corresponde al tipo -> VALIDACION campos.subtipo).
+ *         // desde/hasta 'AAAA-MM-DD' inclusivos, contados en hora de Costa Rica; orden: 'reciente' (defecto) | 'antiguo'; 20 por página (hasta 100).
+ *         // Errores: VALIDACION (campos: tipo, subtipo, desde, hasta), NO_ENCONTRADO (el producto no existe; un producto inactivo SÍ se puede consultar)
+ *     obtenerMovimiento(id) -> Promise<MovimientoDetalle>   // NO_ENCONTRADO
+ *     consolidarMovimientos({ desde, hasta, productoId })
+ *         -> Promise<{ desde, hasta, filas: [{ producto: {id, nombre}, unidadBase, entradas, salidas, salidasGenerales, consumos, diferencia, ajustes,
+ *                                               cantidadEntradas, cantidadSalidas, cantidadAjustes }], totalMovimientos }>
+ *         // Cantidades en la unidad base del producto (texto decimal). entradas = ingresos; salidas = salidas generales + consumos (con sus subtotales);
+ *         // diferencia = entradas - salidas; ajustes = suma con signo de los ajustes (NO cuentan como entradas ni salidas).
+ *         // Solo productos con movimientos en el período, ordenados por nombre. Errores: VALIDACION (desde, hasta), NO_ENCONTRADO
+ *   }                                 // No existe editar ni eliminar movimientos.
+ *
  * Usuario:  { id: string, correo: string, nombre: string }
+ * MovimientoVista: { id, fechaHora (ISO), tipo, subtipo, sentido, producto: {id, nombre}, cantidadOriginal (texto), unidad: {id, nombre, abreviatura} | null,
+ *                    presentacion: {id, nombre} | null, cantidadBase, unidadBase, referencia: { tipo: 'compra'|'salida'|'consumo', id } | null,
+ *                    usuario: { id, nombre (null si no se conoce) }, nota }
+ * MovimientoDetalle: MovimientoVista + { factorAplicado, conversionId, redondeado, existenciaAnterior, existenciaResultante,
+ *                    origen: null | { tipo: 'compra', id, fechaCompra, nota } | { tipo: 'salida', id, motivo, nota } | { tipo: 'consumo', id, nota } }
+ *                    (la clave de idempotencia nunca se expone)
  * Producto: { id, nombre, nombreNormalizado, activo, unidadBaseId (obligatoria desde la V3; null = INCOMPLETO),
  *             creadoEn, actualizadoEn (ISO), creadoPor (id del usuario) }
  * Reglas del catálogo (nombre 2-120, sin espacios sobrantes, único normalizado): ver productos.js
@@ -142,6 +164,7 @@ const SECCIONES_REQUERIDAS = {
   conversiones: ['crearConversion', 'cambiarFactorConversion', 'retirarConversion', 'obtenerConversion', 'listarConversiones', 'convertir'],
   presentaciones: ['crearPresentacion', 'editarPresentacion', 'obtenerPresentacion', 'listarPresentaciones', 'cambiarEstadoPresentacion'],
   inventario: ['registrarMovimiento', 'listarExistencias', 'obtenerExistencia', 'verificarConsistencia', 'alCambiarInventario'],
+  movimientos: ['listarMovimientos', 'obtenerMovimiento', 'consolidarMovimientos'],
 };
 
 export function validarAdaptador(adaptador) {

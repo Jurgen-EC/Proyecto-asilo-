@@ -122,6 +122,7 @@ export default function PaginaDetalleProducto() {
 
           <div className="acciones-formulario">
             <Link className="boton" to={`/productos/${producto.id}/editar`}>Editar</Link>
+            <Link className="boton boton--secundario" to={`/movimientos?producto=${producto.id}`}>Ver movimientos del producto</Link>
             {producto.activo ? (
               <button type="button" className="boton boton--secundario" onClick={() => setConfirmando(true)}>Desactivar</button>
             ) : (

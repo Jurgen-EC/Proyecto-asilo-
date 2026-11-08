@@ -117,6 +117,7 @@ export default function PaginaInventario() {
               <th scope="col" className="tabla__numero">Existencia</th>
               <th scope="col">Situación</th>
               <th scope="col">Última actualización</th>
+              <th scope="col"><span className="solo-lectores">Historial</span></th>
             </tr>
           </thead>
           <tbody>
@@ -129,6 +130,7 @@ export default function PaginaInventario() {
                   {!p.activo && <span className="etiqueta etiqueta--inactivo">Inactivo</span>}
                 </td>
                 <td className="texto-suave">{p.actualizadoEn ? formatearFechaHora(p.actualizadoEn) : '—'}</td>
+                <td><Link to={`/movimientos?producto=${p.productoId}`} aria-label={`Ver movimientos de ${p.nombre}`}>Ver movimientos</Link></td>
               </tr>
             ))}
           </tbody>

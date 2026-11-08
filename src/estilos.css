@@ -201,3 +201,10 @@ a:focus-visible, select:focus-visible, button:focus-visible, .tarjeta--enlace:fo
 .subnavegacion__enlace--activo { background: var(--menu-activo); font-weight: 700; border-color: var(--primario); }
 .existencia-disponible { margin: 0; padding: .6rem .8rem; border: 1px solid var(--borde); border-radius: 8px; background: var(--fondo); }
 
+
+/* Movimientos (V7) */
+.etiqueta--ingreso { color: var(--exito); border-color: var(--exito); }
+.etiqueta--salida { color: var(--primario); border-color: var(--primario); }
+.ficha--ancha { max-width: 720px; }
+.tabla__detalle { font-size: .85rem; margin-top: .15rem; white-space: nowrap; }
+.nota-consolidado { margin-top: .75rem; font-size: .9rem; }

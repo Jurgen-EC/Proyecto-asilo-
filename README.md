@@ -41,7 +41,7 @@ docs/
   MODELO_DE_DATOS_PLANIFICADO.md       Tablas y campos previstos por versión
   GUIA_CONEXION_BASE_DE_DATOS.md       Pasos para conectar la base real
   decisiones/ADR-001-base-de-datos.md  Decisión de base de datos (PENDIENTE)
-  ESTADO_V1.md ... ESTADO_V5.md        Bloque de estado de cada versión
+  ESTADO_V1.md ... ESTADO_V7.md        Bloque de estado de cada versión
 ```
 
 ## Reglas del proyecto (resumen)
