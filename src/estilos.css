@@ -208,3 +208,9 @@ a:focus-visible, select:focus-visible, button:focus-visible, .tarjeta--enlace:fo
 .ficha--ancha { max-width: 720px; }
 .tabla__detalle { font-size: .85rem; margin-top: .15rem; white-space: nowrap; }
 .nota-consolidado { margin-top: .75rem; font-size: .9rem; }
+
+/* ---- Gastos y costos (Versión 8) ---- */
+.unidad-costo { font-size: .85rem; }
+.tabla td .etiqueta { margin-left: .4rem; }
+.ficha + .aviso-lista { margin-top: 0; }
+

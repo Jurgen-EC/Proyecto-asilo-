@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { useDatos } from '../../nucleo/datos/useDatos.js';
 import { mensajeParaUsuario } from '../../nucleo/datos/errores.js';
 import { TAMANO_PAGINA_OPERACIONES } from '../../nucleo/datos/salidas.js';
-import { formatearCantidad, formatearFechaHora } from '../../compartido/utilidades/formato.js';
+import { formatearCantidad, formatearDinero, formatearFechaHora } from '../../compartido/utilidades/formato.js';
 import Cargando from '../../compartido/componentes/Cargando.jsx';
 import EstadoVacio from '../../compartido/componentes/EstadoVacio.jsx';
 import SelectorDeProducto from '../../compartido/componentes/SelectorDeProducto.jsx';
@@ -113,7 +113,9 @@ export default function PaginaListaOperaciones({ clase }) {
               <th scope="col" className="tabla__numero">Cantidad</th>
               <th scope="col" className="tabla__numero">Descontado</th>
               {esSalida && <th scope="col">Motivo</th>}
+              {!esSalida && <th scope="col" className="tabla__numero">Costo</th>}
               <th scope="col">Nota</th>
+              {!esSalida && <th scope="col"><span className="solo-lectores">Acciones</span></th>}
             </tr>
           </thead>
           <tbody>
@@ -124,7 +126,13 @@ export default function PaginaListaOperaciones({ clase }) {
                 <td className="tabla__numero">{cantidadIngresada(o)}</td>
                 <td className="tabla__numero">{formatearCantidad(o.movimiento.cantidadBase, o.movimiento.unidadBase?.abreviatura ?? '')}</td>
                 {esSalida && <td>{o.motivo}</td>}
+                {!esSalida && (
+                  <td className="tabla__numero">
+                    {o.costoImporte === null ? <span className="texto-suave">Sin costo registrado</span> : formatearDinero(o.costoImporte)}
+                  </td>
+                )}
                 <td className="texto-suave">{o.nota ?? '—'}</td>
+                {!esSalida && <td className="tabla__acciones"><Link to={`/consumos/${o.id}`} aria-label={`Ver el consumo de ${o.producto.nombre}`}>Ver</Link></td>}
               </tr>
             ))}
           </tbody>
