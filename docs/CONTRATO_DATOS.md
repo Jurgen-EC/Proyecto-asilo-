@@ -212,8 +212,44 @@ Todas las operaciones exigen sesión (`SIN_SESION`). **Decisión del equipo (PRO
   - **Verificable:** cada total coincide con la suma de los movimientos que devuelve `listarMovimientos` con el mismo producto y período (`tipo: 'ingreso'`, `tipo: 'salida'`, `subtipo: 'consumo'`, etc.).
 - Reglas puras reutilizables: `src/nucleo/datos/movimientos.js`. Pruebas de contrato reutilizables: `src/nucleo/datos/pruebasContratoMovimientos.js`.
 
+### 2.10 Versión 8: `gastos`, `costos` y el costo del consumo
+Todas las operaciones exigen sesión (`SIN_SESION`). **El costo promedio está BLOQUEADO** (RF-027, RF-028, RF-029): depende de una fórmula que el hogar todavía no aprobó. **No existe ninguna operación de costo promedio** en el contrato; la lógica queda aislada en `src/nucleo/costos` (`calcularCostoPromedio`, que lanza `FormulaPendiente`) y las pantallas muestran «Pendiente de definición». No se asume promedio ponderado, simple, último costo ni costo por unidad base.
+
+**Gastos (RF-012)**
+
+| Operación | Resultado | Errores |
+|---|---|---|
+| `registrarGasto({fechaGasto, concepto, importe, productoId?, compraId?, nota?, claveIdempotencia})` | `{gasto, repetido}` | `VALIDACION` (con `campos`), `OPERACION_DUPLICADA` |
+| `listarGastos({desde, hasta, productoId, compraId, pagina, tamanoPagina})` | `{items, total, pagina, tamanoPagina, totalPaginas}` | `VALIDACION` (fechas), `NO_ENCONTRADO` (producto o compra) |
+| `obtenerGasto(id)` | `Gasto` | `NO_ENCONTRADO` |
+
+- **Gasto:** `{id, fechaGasto, concepto, importe, nota, usuarioId, registradoEn, producto: {id, nombre} | null, compra: {id, fechaCompra, total} | null, relacionadoConCompra}`. El importe es texto decimal exacto con 2 decimales. `usuarioId`, `registradoEn` e `id` los asigna la capa de datos.
+- **Entrada:** `fechaGasto` 'AAAA-MM-DD' (no futura, en hora de Costa Rica); `concepto` de 3 a 120 caracteres (PROVISIONAL); `importe` mayor que cero, hasta 2 decimales (coma o punto); `nota` hasta 500; `claveIdempotencia` hasta 80. Un `productoId` o `compraId` inexistente se avisa en `campos.productoId` o `campos.compraId`. Todos los mensajes llegan juntos.
+- **Un gasto NO se suma a nada:** un gasto con `compraId` se identifica como relacionado (`relacionadoConCompra: true`), pero **no cambia el total de la compra ni el historial de costos**. Cómo se evita contar dos veces el mismo importe se decide al aprobarse la fórmula. La lista no entrega totales.
+- **Idempotencia:** reenviar el mismo gasto devuelve el original (`repetido: true`); la misma clave con otro gasto se rechaza con `OPERACION_DUPLICADA`.
+- **Listados:** `desde` y `hasta` sobre `fechaGasto` (inclusivos); la fecha más reciente primero.
+- **Inmutables:** no existen operaciones para editar ni borrar gastos (el plan no las pide). Una corrección queda como pendiente.
+
+**Costo del consumo (RF-030)**
+- `registrarConsumo` acepta `costoImporte` **opcional**: un importe propio, origen `manual`, mayor que cero y con hasta 2 decimales. **No se deriva de ningún promedio.** Sin costo es `null` («sin costo registrado»), nunca 0. Un costo inválido: `VALIDACION` con `campos.costoImporte`, sin registrar nada. Una salida ignora `costoImporte`.
+- `Consumo` suma: `costoImporte` (texto con 2 decimales o `null`), `costoOrigen` (`'manual'` o `null`), `costoActualizadoEn` y `costoCambios`: `[{importeAnterior, importeNuevo, cambiadoEn, usuarioId}]`, el más reciente primero.
+- **`editarCostoConsumo(id, {costoImporte})` → `{consumo, cambiado}`:** es el **único dato editable** de un consumo (todo lo demás sigue inmutable). `costoImporte` vacío o `null` quita el costo. **Cada cambio queda en el historial y el valor anterior no se pierde.** Un valor igual al actual no hace nada (`cambiado: false`). Solo mientras el período no esté cerrado: el «cierre» todavía no existe (se define con los reportes, V9 y V10), así que hoy siempre se puede; `periodoCerrado` (en `src/nucleo/costos`) es el punto donde se conectará. Errores: `VALIDACION` (`campos.costoImporte`), `NO_ENCONTRADO` (también para el id de una salida).
+- La misma clave de idempotencia con otro costo se rechaza con `OPERACION_DUPLICADA`.
+
+**Costos de adquisición (RF-026, RNF-86): solo lectura**
+
+| Operación | Resultado | Errores |
+|---|---|---|
+| `listarCostosPorProducto({busqueda, estado, pagina, tamanoPagina})` | `{items: [{productoId, nombre, activo, unidadBase, lineasDeCompra}], total, pagina, tamanoPagina, totalPaginas}` | — |
+| `historialCostosAdquisicion(productoId, {desde, hasta, pagina, tamanoPagina})` | `{producto, items: [{lineaId, compraId, fechaCompra, cantidad, unidad, presentacion, costoUnitario, costoTotal}], total, ...}` | `NO_ENCONTRADO`, `VALIDACION` (fechas) |
+
+- El historial es **exactamente las líneas de compra registradas**, tal como se registraron (RF-026 se registra en las compras de la V5). `costoUnitario` es por unidad o por presentación, igual que en la compra. **No se promedia, no se rotula como promedio, no se convierte a costo por unidad base y no entrega totales.** Un producto sin compras tiene historial vacío (faltante, no ceros).
+- Un gasto o un consumo con costo **no cambian** el historial.
+- Reglas puras en `src/nucleo/datos/gastos.js` y `salidas.js`; módulo aislado en `src/nucleo/costos`. En el demo, los gastos viven en `inventario.demo.gastos` y el costo de los consumos con su historial dentro de `inventario.demo.inventario`.
+- **Para la base real:** la tabla `gastos` con `clave_idempotencia` única y sin `UPDATE`/`DELETE`; las columnas de costo en `consumos` y la tabla de cambios (solo `INSERT`); `editarCostoConsumo` en una sola transacción (actualizar el consumo e insertar el cambio); las consultas de costos de adquisición leen las líneas de compra sin agrupar.
+
 ## 3. Secciones previstas (se agregan al construir cada módulo)
-_(Las versiones 2 a 7 ya están en las secciones 2.2 a 2.9; ver `ESTADO_V2.md` a `ESTADO_V7.md`.)_
+_(Las versiones 2 a 8 ya están en las secciones 2.2 a 2.10; ver `ESTADO_V2.md` a `ESTADO_V8.md`.)_
 
 | Versión | Sección | Operaciones |
 |---|---|---|
@@ -222,7 +258,7 @@ _(Las versiones 2 a 7 ya están en las secciones 2.2 a 2.9; ver `ESTADO_V2.md` a
 | 5 | `compras` (hecha) | `registrarCompra`, `listarCompras`, `obtenerCompra` (ver 2.7) |
 | 6 | `salidas`, `consumos` (hechas) | `registrarSalida`, `registrarConsumo`, `listarSalidas`, `listarConsumos`, `obtenerSalida`, `obtenerConsumo` (ver 2.8) |
 | 7 | `movimientos` (hecha) | `listarMovimientos`, `obtenerMovimiento`, `consolidarMovimientos` (ver 2.9) |
-| 8 | `gastos`, `costos` | `registrarGasto`, `listarGastos`, `historialCostosAdquisicion(productoId)` |
+| 8 | `gastos`, `costos` (hechas) | `registrarGasto`, `listarGastos`, `obtenerGasto`, `listarCostosPorProducto`, `historialCostosAdquisicion(productoId)`, `editarCostoConsumo` (ver 2.10). Costo promedio BLOQUEADO |
 | 9–10 | `reportes` | `inventarioAlCierre(mes)`, `resumenMovimientos(mes)`, `comprasMensuales(mes)`, `gastosMensuales(mes)`, `consumoMensual(mes)`, `costosMensuales(mes)` |
 | 11 | `conteos` | `crear`, `registrarCantidadFisica`, `finalizar`, `comparacion(conteoId)` |
 | 12 | `ajustes` | `confirmarAjuste({conteoLineaId, motivo, claveIdempotencia})`, `anularMovimiento({movimientoId, motivo})` |

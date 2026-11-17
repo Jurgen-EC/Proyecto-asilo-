@@ -40,7 +40,7 @@ Todas las tablas incluyen `creado_en` y, cuando aplica, `creado_por` y `actualiz
 **Construida en la V6** (ver `ESTADO_V6.md`). Salida y consumo son conceptos distintos: dos tablas, dos servicios. Cada operación genera exactamente un movimiento (tipo `salida`; subtipo `salida_general` o `consumo`).
 - **salidas:** id, movimiento_id (único), motivo (texto, obligatorio, hasta 200), nota (nulo), fecha_registro (servidor), **clave_idempotencia (única)**.
 - **consumos:** id, movimiento_id (único), nota (nulo), fecha_registro (servidor), **clave_idempotencia (única)**. **Sin motivo.**
-- `costo_importe` y `costo_origen` del consumo **no se crean todavía**: se agregan en la V8 (el plan indica que el costo llega entonces).
+- `costo_importe` y `costo_origen` del consumo se agregan en la **V8** (ver más abajo).
 - El movimiento generado lleva `referencia_tipo` = `salida` o `consumo` y `referencia_id` = id del registro. Inmutables: sin `UPDATE` ni `DELETE`.
 
 ## Versión 7 — historial y consolidado (sin tablas nuevas)
@@ -51,9 +51,13 @@ Todas las tablas incluyen `creado_en` y, cuando aplica, `creado_por` y `actualiz
 - **Consolidado:** una sola consulta agrupada por producto con `sum(...) filter (where tipo = ...)`; los ajustes se suman con signo y **no** entran en entradas ni salidas.
 - Todo es de **solo lectura**: el rol que ejecuta estas consultas no necesita permisos de escritura.
 
-## Versión 8 — gastos
-- **gastos:** id, fecha_gasto, concepto, importe decimal(14,2), producto_id (opcional), compra_id (opcional), nota.
-  No existe tabla ni campo de costo promedio: fórmula pendiente de aprobación del hogar.
+## Versión 8 — gastos y costos de adquisición (sin fórmula de promedio)
+**Construida en la V8** (ver `ESTADO_V8.md`).
+- **gastos:** id, fecha_gasto, concepto (3 a 120), importe decimal(14,2) > 0, producto_id (nulo), compra_id (nulo), nota (nulo), usuario_id, registrado_en (servidor), **clave_idempotencia (única)**. Inmutable (sin `UPDATE` ni `DELETE`).
+  Un gasto con `compra_id` es un gasto **relacionado**: **no se suma** al costo de la compra ni a ningún total (la regla se cierra al aprobarse la fórmula).
+- **consumos (columnas nuevas):** `costo_importe` decimal(14,2) nulo (> 0), `costo_origen` (`manual`) nulo, `costo_actualizado_en` nulo. Es el **único dato editable** de un consumo. Sin costo = nulo, nunca 0.
+- **consumo_costo_cambios (nueva):** id, consumo_id, importe_anterior (nulo), importe_nuevo (nulo), cambiado_en, usuario_id. Solo `INSERT`: el valor anterior no se pierde. *(Se agregó respecto al modelo original, para mantener la trazabilidad.)*
+- **No existe tabla ni campo de costo promedio:** la fórmula está pendiente de aprobación del hogar (RF-027, RF-028, RF-029). Los costos de adquisición se leen directamente de las líneas de compra.
 
 ## Versión 11 — conteos
 - **conteos:** id, iniciado_en, finalizado_en, estado (`en_curso`|`finalizado`), usuario_id, nota.
