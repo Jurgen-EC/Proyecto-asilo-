@@ -41,7 +41,8 @@ export function mensajeFechaCompra(valor, hoy) {
 /** Clave de idempotencia de la línea N (1, 2, 3…) derivada de la clave de la compra. */
 export const claveDeLinea = (claveCompra, indice) => `${claveCompra}:${indice + 1}`;
 
-function leerImporte(valor, etiqueta) {
+/** Lee un importe en colones: mayor que cero, hasta 2 decimales y dentro del máximo. Devuelve { importe } (Decimal) o { mensaje }. */
+export function leerImporte(valor, etiqueta) {
   const d = leerDecimal(valor);
   if (d === null) return { mensaje: `Escribí ${etiqueta} con números (por ejemplo 1250,75).` };
   if (comparar(d, 0) <= 0) return { mensaje: `${etiqueta[0].toUpperCase()}${etiqueta.slice(1)} debe ser mayor que cero.` };

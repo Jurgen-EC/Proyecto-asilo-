@@ -10,9 +10,9 @@
 // ambas aparezcan como Salidas en el historial y el consolidado (V7) sin perder su distinción.
 import { ErrorDatos, CODIGOS } from './errores.js';
 import { lanzarSiHayCampos } from './productos.js';
-import { claveDeLinea, normalizarConsultaCompras, TAMANO_PAGINA_COMPRAS, TAMANO_PAGINA_COMPRAS_MAX } from './compras.js';
+import { claveDeLinea, leerImporte, normalizarConsultaCompras, TAMANO_PAGINA_COMPRAS, TAMANO_PAGINA_COMPRAS_MAX } from './compras.js';
 import { limpiarEspacios } from '../../compartido/utilidades/texto.js';
-import { leerDecimal, comparar } from '../../compartido/utilidades/decimales.js';
+import { leerDecimal, comparar, DECIMALES_DINERO } from '../../compartido/utilidades/decimales.js';
 
 export const MOTIVO_MAX = 200; // PROVISIONAL
 export const NOTA_OPERACION_MAX = 500;
@@ -37,13 +37,36 @@ export function mensajeCantidad(valor) {
   return '';
 }
 
+/**
+ * Lee el costo de un consumo (V8: RF-030). El costo es un IMPORTE PROPIO que escribe la persona (origen «manual»): no se deriva de
+ * ningún promedio. Vacío = «sin costo registrado» (un valor faltante, no un cero). Devuelve { costoImporte } (texto con 2 decimales,
+ * o null si está vacío) o { mensaje }. PROVISIONAL: mayor que cero y hasta 2 decimales, como los costos de las compras.
+ */
+export function leerCostoConsumo(valor) {
+  if (vacio(valor)) return { costoImporte: null };
+  const r = leerImporte(valor, 'el costo del consumo');
+  return r.mensaje ? { mensaje: r.mensaje } : { costoImporte: r.importe.toFixed(DECIMALES_DINERO) };
+}
+
+/** Valida la entrada de `editarCostoConsumo`: { costoImporte } con un importe, o vacío/null para quitar el costo. */
+export function validarEdicionDeCosto(entrada) {
+  const e = entrada && typeof entrada === 'object' ? entrada : {};
+  if (!('costoImporte' in e)) {
+    const mensaje = 'Escribí el costo del consumo, o dejalo vacío para quitarlo.';
+    throw new ErrorDatos(CODIGOS.VALIDACION, mensaje, { costoImporte: mensaje });
+  }
+  const r = leerCostoConsumo(e.costoImporte);
+  if (r.mensaje) throw new ErrorDatos(CODIGOS.VALIDACION, r.mensaje, { costoImporte: r.mensaje });
+  return { costoImporte: r.costoImporte };
+}
+
 /** Clave de idempotencia del ÚNICO movimiento de la operación, derivada de la clave de la operación (igual que en las compras). */
 export const claveDelMovimiento = (claveOperacion) => claveDeLinea(claveOperacion, 0);
 
 /**
  * Valida y normaliza la entrada de `registrarSalida` (clase 'salida') o `registrarConsumo` (clase 'consumo').
  * Lanza VALIDACION con TODOS los mensajes por campo juntos.
- * Entrada: { productoId, cantidad, unidadId | presentacionId, motivo (solo salidas), nota?, claveIdempotencia }.
+ * Entrada: { productoId, cantidad, unidadId | presentacionId, motivo (solo salidas), costoImporte (solo consumos, opcional), nota?, claveIdempotencia }.
  * Si hay presentacionId, `cantidad` es el número de presentaciones (1 caja) y no se envía unidadId.
  * La fecha y la hora, el usuario y el id los asigna la capa de datos. Un consumo NO tiene motivo: si llega, se ignora.
  */
@@ -77,13 +100,21 @@ export function validarOperacion(entrada, clase) {
     else nota = limpiarEspacios(e.nota) || null;
   }
 
+  // Solo el consumo tiene costo (opcional, manual). En una salida se ignora.
+  let costoImporte = null;
+  if (!requiereMotivo) {
+    const c = leerCostoConsumo(e.costoImporte);
+    if (c.mensaje) campos.costoImporte = c.mensaje;
+    else costoImporte = c.costoImporte;
+  }
+
   const claveIdempotencia = typeof e.claveIdempotencia === 'string' ? limpiarEspacios(e.claveIdempotencia) : '';
   if (!claveIdempotencia) campos.claveIdempotencia = 'Falta la clave de idempotencia de la operación.';
   else if (claveIdempotencia.length > CLAVE_OPERACION_MAX) campos.claveIdempotencia = `La clave de idempotencia no puede pasar de ${CLAVE_OPERACION_MAX} caracteres.`;
 
   lanzarSiHayCampos(campos);
   return {
-    productoId: e.productoId, unidadId, presentacionId, cantidad: leerDecimal(e.cantidad).toFixed(), motivo, nota, claveIdempotencia,
+    productoId: e.productoId, unidadId, presentacionId, cantidad: leerDecimal(e.cantidad).toFixed(), motivo, nota, costoImporte, claveIdempotencia,
   };
 }
 
@@ -100,6 +131,7 @@ export function operacionCoincide(n, registro, movimiento) {
     && leerDecimal(n.cantidad).equals(movimiento.cantidadOriginal)
     && mismaUnidad
     && (n.motivo ?? null) === (registro.motivo ?? null)
+    && (n.costoImporte ?? null) === (registro.costoImporte ?? null)
     && n.nota === registro.nota;
 }
 

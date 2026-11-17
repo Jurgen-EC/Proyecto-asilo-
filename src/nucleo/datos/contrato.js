@@ -100,10 +100,33 @@
  *     obtenerSalida(id) -> Promise<Salida>   // NO_ENCONTRADO
  *   }                                 // No existe editar ni eliminar salidas: se corrigen con movimientos nuevos (V12).
  *
- *   consumos: {                    // Versión 6. Misma forma que salidas, pero SIN motivo. Movimiento tipo 'salida', subtipo 'consumo'. El costo llega en la V8.
- *     registrarConsumo({ productoId, cantidad, unidadId | presentacionId, nota?, claveIdempotencia }) -> Promise<{ consumo: Consumo, existencia, repetido }>
+ *   consumos: {                    // Versión 6. Misma forma que salidas, pero SIN motivo. Movimiento tipo 'salida', subtipo 'consumo'.
+ *     registrarConsumo({ productoId, cantidad, unidadId | presentacionId, costoImporte?, nota?, claveIdempotencia }) -> Promise<{ consumo: Consumo, existencia, repetido }>
+ *         // V8: `costoImporte` es OPCIONAL: un importe propio (mayor que cero, hasta 2 decimales), origen 'manual'. NO se deriva de ningún promedio.
+ *         // Sin costo = null («sin costo registrado»), nunca 0. VALIDACION con campos.costoImporte si no es un importe válido.
  *     listarConsumos({ desde, hasta, productoId, pagina, tamanoPagina })  -> Promise<{ items: Consumo[], total, pagina, tamanoPagina, totalPaginas }>
  *     obtenerConsumo(id)                                                   -> Promise<Consumo>   // NO_ENCONTRADO
+ *     editarCostoConsumo(id, { costoImporte })                              -> Promise<{ consumo: Consumo, cambiado }>   // V8
+ *         // ÚNICO dato editable de un consumo (lo demás sigue inmutable). costoImporte vacío o null QUITA el costo. Cada cambio queda en el historial
+ *         // `costoCambios` (el valor anterior no se pierde). Solo mientras el período no esté cerrado (hoy no existe el cierre: siempre se puede).
+ *         // Errores: VALIDACION (campos.costoImporte), NO_ENCONTRADO. Si el valor es igual al actual no hace nada (cambiado: false).
+ *   }
+ *
+ *   gastos: {                      // Versión 8. Todas exigen sesión (SIN_SESION). Un gasto es un importe con concepto; NO modifica compras ni costos.
+ *     registrarGasto({ fechaGasto, concepto, importe, productoId?, compraId?, nota?, claveIdempotencia }) -> Promise<{ gasto: Gasto, repetido }>
+ *         // Errores: VALIDACION (campos: fechaGasto, concepto, importe, productoId, compraId, nota, claveIdempotencia), OPERACION_DUPLICADA.
+ *         // Idempotente por claveIdempotencia. Un gasto con compraId se identifica como RELACIONADO y NO se suma automáticamente a la compra.
+ *     listarGastos({ desde, hasta, productoId, compraId, pagina, tamanoPagina }) -> Promise<{ items: Gasto[], total, pagina, tamanoPagina, totalPaginas }>
+ *         // desde/hasta sobre fechaGasto ('AAAA-MM-DD', inclusivos); fecha más reciente primero. NO_ENCONTRADO si el producto o la compra no existen.
+ *     obtenerGasto(id) -> Promise<Gasto>   // NO_ENCONTRADO
+ *   }                                 // No existe editar ni eliminar gastos (el plan no los pide; una corrección queda pendiente).
+ *
+ *   costos: {                      // Versión 8. SOLO LECTURA. Costos de adquisición REALES. NO existe ninguna operación de costo promedio (BLOQUEADO).
+ *     listarCostosPorProducto({ busqueda, estado, pagina, tamanoPagina })
+ *         -> Promise<{ items: [{ productoId, nombre, activo, unidadBase, lineasDeCompra }], total, pagina, tamanoPagina, totalPaginas }>
+ *     historialCostosAdquisicion(productoId, { desde, hasta, pagina, tamanoPagina })
+ *         -> Promise<{ producto, items: [{ lineaId, compraId, fechaCompra, cantidad, unidad, presentacion, costoUnitario, costoTotal }], total, ... }>
+ *         // Exactamente las líneas de compra registradas, tal como se registraron (sin promediar, sin costo por unidad base). NO_ENCONTRADO si no existe el producto.
  *   }
  *
  *   movimientos: {                 // Versión 7. SOLO LECTURA. Todas exigen sesión (SIN_SESION). Los movimientos son inmutables.
@@ -144,6 +167,10 @@
  * Salida:   { id, movimientoId, motivo, nota, fechaRegistro (ISO, del servidor), usuarioId, producto: {id, nombre}, cantidad (la ingresada, en su unidad
  *             o presentación), unidad, presentacion (o null), movimiento: { id, tipo, subtipo, cantidadBase, unidadBase, factorAplicado, conversionId,
  *             redondeado, fechaHora } }.  Consumo: igual pero SIN motivo.  Reglas puras: salidas.js
+ * Consumo:  (como Salida, sin motivo) + costoImporte (texto con 2 decimales | null), costoOrigen ('manual' | null), costoActualizadoEn, costoCambios: [{ importeAnterior,
+ *             importeNuevo, cambiadoEn, usuarioId }] (el más reciente primero).
+ * Gasto:    { id, fechaGasto, concepto, importe (texto con 2 decimales), nota, usuarioId, registradoEn, producto: {id, nombre} | null,
+ *             compra: {id, fechaCompra, total} | null, relacionadoConCompra }.  Reglas puras: gastos.js.  Costos: src/nucleo/costos (FormulaPendiente)
  * Conversion: { id, productoId (null = general), unidadOrigenId, unidadDestinoId, factor (1 origen = factor destino), vigente,
  *               sugerida, reemplazaId, reemplazadaPorId, creadoEn, creadoPor }.  Reglas y función de cálculo: conversiones.js
  * Movimiento: { id, productoId, tipo, subtipo, sentido (1 | -1), cantidadOriginal, unidadOriginalId, presentacionOriginalId (o null),
@@ -160,7 +187,9 @@ const SECCIONES_REQUERIDAS = {
   unidades: ['crearUnidad', 'editarUnidad', 'obtenerUnidad', 'listarUnidades', 'cambiarEstadoUnidad'],
   compras: ['registrarCompra', 'listarCompras', 'obtenerCompra'],
   salidas: ['registrarSalida', 'listarSalidas', 'obtenerSalida'],
-  consumos: ['registrarConsumo', 'listarConsumos', 'obtenerConsumo'],
+  consumos: ['registrarConsumo', 'listarConsumos', 'obtenerConsumo', 'editarCostoConsumo'],
+  gastos: ['registrarGasto', 'listarGastos', 'obtenerGasto'],
+  costos: ['listarCostosPorProducto', 'historialCostosAdquisicion'],
   conversiones: ['crearConversion', 'cambiarFactorConversion', 'retirarConversion', 'obtenerConversion', 'listarConversiones', 'convertir'],
   presentaciones: ['crearPresentacion', 'editarPresentacion', 'obtenerPresentacion', 'listarPresentaciones', 'cambiarEstadoPresentacion'],
   inventario: ['registrarMovimiento', 'listarExistencias', 'obtenerExistencia', 'verificarConsistencia', 'alCambiarInventario'],
