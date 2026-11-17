@@ -17,7 +17,10 @@ import {
 } from './compras.js';
 import {
   validarOperacion, operacionCoincide, errorDeOperacion, claveDelMovimiento, normalizarConsultaOperaciones, CLASES_OPERACION,
+  validarEdicionDeCosto,
 } from './salidas.js';
+import { validarGasto, gastoCoincide, normalizarConsultaGastos } from './gastos.js';
+import { periodoCerrado } from '../costos/index.js';
 import { hoyEnCostaRica } from '../../compartido/utilidades/formato.js';
 import {
   normalizarConsultaMovimientos, filtrarMovimientos, consolidarMovimientos as consolidar, existenciaAlMovimiento,
@@ -46,6 +49,7 @@ const LLAVE_PRODUCTOS = 'inventario.demo.productos';
 const LLAVE_UNIDADES = 'inventario.demo.unidades';
 const LLAVE_PRESENTACIONES = 'inventario.demo.presentaciones';
 const LLAVE_CONVERSIONES = 'inventario.demo.conversiones';
+const LLAVE_GASTOS = 'inventario.demo.gastos'; // gastos (V8): no forman parte de las existencias, van en su propia clave
 const LLAVE_INVENTARIO = 'inventario.demo.inventario'; // movimientos y existencias, en UNA sola clave: se escriben juntos o no se escribe nada
 
 function crearAlmacen() {
@@ -92,10 +96,11 @@ export function crearAdaptadorDemo({ almacen = crearAlmacen(), retardoMs = 150, 
           ...o,
           compras: Array.isArray(o.compras) ? o.compras : [], compraLineas: Array.isArray(o.compraLineas) ? o.compraLineas : [],
           salidas: Array.isArray(o.salidas) ? o.salidas : [], consumos: Array.isArray(o.consumos) ? o.consumos : [],
+          consumoCostoCambios: Array.isArray(o.consumoCostoCambios) ? o.consumoCostoCambios : [],
         };
       }
     } catch { /* se trata como vacío */ }
-    return { movimientos: [], existencias: [], compras: [], compraLineas: [], salidas: [], consumos: [] };
+    return { movimientos: [], existencias: [], compras: [], compraLineas: [], salidas: [], consumos: [], consumoCostoCambios: [] };
   }
   const guardarInventario = (inventario) => almacen.setItem(LLAVE_INVENTARIO, JSON.stringify(inventario));
   // Los registros se ejecutan UNO TRAS OTRO (equivale al bloqueo de fila de una base real). Además, cada uno
@@ -305,7 +310,7 @@ export function crearAdaptadorDemo({ almacen = crearAlmacen(), retardoMs = 150, 
   const listaDe = (inventario, clase) => (clase === 'salida' ? inventario.salidas : inventario.consumos);
 
   // Vista enriquecida de una salida o consumo: lo guardado más el producto, la unidad y el movimiento que generó.
-  function crearVistas(inventario) {
+  function crearVistas(inventario, clase) {
     const productos = new Map(leerProductos().map((p) => [p.id, p]));
     const unidades = new Map(leerUnidades().map((u) => [u.id, u]));
     const presentaciones = new Map(leerPresentaciones().map((p) => [p.id, p]));
@@ -316,6 +321,12 @@ export function crearAdaptadorDemo({ almacen = crearAlmacen(), retardoMs = 150, 
       const { claveIdempotencia, ...propio } = registro;
       return {
         ...propio,
+        // V8: el consumo muestra su costo (manual) y el historial de sus cambios; si no tiene, es un valor FALTANTE (null), nunca un cero.
+        ...(clase === 'consumo' ? {
+          costoImporte: registro.costoImporte ?? null, costoOrigen: registro.costoOrigen ?? null, costoActualizadoEn: registro.costoActualizadoEn ?? null,
+          costoCambios: inventario.consumoCostoCambios.filter((c) => c.consumoId === registro.id).reverse()
+            .map(({ importeAnterior, importeNuevo, cambiadoEn, usuarioId }) => ({ importeAnterior, importeNuevo, cambiadoEn, usuarioId })),
+        } : {}),
         usuarioId: m.usuarioId,
         producto: { id: m.productoId, nombre: productos.get(m.productoId)?.nombre ?? '' },
         // La cantidad ingresada conserva lo USADO (unidad o presentación, factor y conversión): cambiar después una equivalencia no la reescribe.
@@ -346,7 +357,7 @@ export function crearAdaptadorDemo({ almacen = crearAlmacen(), retardoMs = 150, 
           const movimiento = inventario.movimientos.find((m) => m.id === previo.movimientoId);
           if (!operacionCoincide(n, previo, movimiento)) throw errorClaveReutilizada();
           const fila = inventario.existencias.find((x) => x.productoId === movimiento.productoId);
-          return { [clase]: crearVistas(inventario)(previo), existencia: { ...fila }, repetido: true };
+          return { [clase]: crearVistas(inventario, clase)(previo), existencia: { ...fila }, repetido: true };
         }
 
         const id = generarId();
@@ -365,6 +376,8 @@ export function crearAdaptadorDemo({ almacen = crearAlmacen(), retardoMs = 150, 
 
         const registro = {
           id, movimientoId: r.movimiento.id, ...(clase === 'salida' ? { motivo: n.motivo } : {}),
+          // V8: el costo del consumo es un importe propio escrito por la persona (origen manual); sin costo queda null, no 0.
+          ...(clase === 'consumo' ? { costoImporte: n.costoImporte, costoOrigen: n.costoImporte ? 'manual' : null, costoActualizadoEn: n.costoImporte ? ahora : null } : {}),
           nota: n.nota, fechaRegistro: ahora, claveIdempotencia: n.claveIdempotencia,
         };
         ganchos.antesDeConfirmar?.();
@@ -374,7 +387,7 @@ export function crearAdaptadorDemo({ almacen = crearAlmacen(), retardoMs = 150, 
         };
         guardarInventario(siguiente);
         avisarInventario({ productoId: n.productoId, movimientoId: r.movimiento.id }); // tiempo real
-        return { [clase]: crearVistas(siguiente)(registro), existencia: { ...r.existencia }, repetido: false };
+        return { [clase]: crearVistas(siguiente, clase)(registro), existencia: { ...r.existencia }, repetido: false };
       } catch (e) {
         if (e instanceof ErrorDatos) throw e;
         throw new ErrorDatos(CODIGOS.DESCONOCIDO); // un fallo inesperado no deja nada guardado
@@ -386,7 +399,7 @@ export function crearAdaptadorDemo({ almacen = crearAlmacen(), retardoMs = 150, 
     const { desde, hasta, productoId, pagina, tamanoPagina } = normalizarConsultaOperaciones(consulta);
     if (productoId) exigirProducto(leerProductos(), productoId);
     const inventario = leerInventario();
-    const vista = crearVistas(inventario);
+    const vista = crearVistas(inventario, clase);
     const filtradas = listaDe(inventario, clase)
       .map((registro, posicion) => ({ posicion, v: vista(registro) }))
       .filter(({ v }) => {
@@ -441,7 +454,35 @@ export function crearAdaptadorDemo({ almacen = crearAlmacen(), retardoMs = 150, 
     const inventario = leerInventario();
     const registro = listaDe(inventario, clase).find((r) => r.id === id);
     if (!registro) throw new ErrorDatos(CODIGOS.NO_ENCONTRADO);
-    return crearVistas(inventario)(registro);
+    return crearVistas(inventario, clase)(registro);
+  }
+
+  // GASTOS (V8). Un gasto es un importe con concepto, opcionalmente ligado a un producto y/o a una compra. NO toca existencias, compras
+  // ni costos: un gasto relacionado a una compra se identifica como relacionado y NO se suma automáticamente a nada.
+  function leerGastos() {
+    try {
+      const lista = JSON.parse(almacen.getItem(LLAVE_GASTOS) ?? '[]');
+      return Array.isArray(lista) ? lista : [];
+    } catch {
+      return [];
+    }
+  }
+  const guardarGastos = (lista) => almacen.setItem(LLAVE_GASTOS, JSON.stringify(lista));
+
+  function crearVistaDeGasto() {
+    const productos = new Map(leerProductos().map((p) => [p.id, p]));
+    const compras = new Map(leerInventario().compras.map((c) => [c.id, c]));
+    return (gasto) => {
+      const { claveIdempotencia, productoId, compraId, ...propio } = gasto;
+      const producto = productoId ? productos.get(productoId) : null;
+      const compra = compraId ? compras.get(compraId) : null;
+      return {
+        ...propio,
+        producto: productoId ? { id: productoId, nombre: producto?.nombre ?? '' } : null,
+        compra: compraId ? { id: compraId, fechaCompra: compra?.fechaCompra ?? '', total: compra?.total ?? null } : null,
+        relacionadoConCompra: Boolean(compraId), // se identifica como relacionado; NO se suma automáticamente
+      };
+    };
   }
 
   return {
@@ -977,6 +1018,153 @@ export function crearAdaptadorDemo({ almacen = crearAlmacen(), retardoMs = 150, 
         await esperar(retardoMs);
         exigirSesion();
         return obtenerOperacion('consumo', id);
+      },
+      // ÚNICO dato editable de un consumo (RF-030): el costo manual. Todo lo demás sigue inmutable. Cada cambio queda en un historial
+      // (el valor anterior no se pierde) y se confirma con UNA sola escritura. Solo mientras el período no esté cerrado.
+      async editarCostoConsumo(id, entrada) {
+        await esperar(retardoMs);
+        return enSerie(() => {
+          try {
+            const usuario = exigirSesion();
+            const ahora = new Date().toISOString();
+            const { costoImporte } = validarEdicionDeCosto(entrada);
+            const inventario = leerInventario();
+            const actual = inventario.consumos.find((c) => c.id === id);
+            if (!actual) throw new ErrorDatos(CODIGOS.NO_ENCONTRADO);
+            if (periodoCerrado(hoyEnCostaRica(new Date(actual.fechaRegistro)))) {
+              const mensaje = 'El período de este consumo está cerrado: su costo ya no se puede editar.';
+              throw new ErrorDatos(CODIGOS.VALIDACION, mensaje, { costoImporte: mensaje });
+            }
+            const anterior = actual.costoImporte ?? null;
+            if (anterior === costoImporte) return { consumo: crearVistas(inventario, 'consumo')(actual), cambiado: false };
+            const actualizado = {
+              ...actual, costoImporte, costoOrigen: costoImporte ? 'manual' : null, costoActualizadoEn: costoImporte ? ahora : null,
+            };
+            const cambio = { id: generarId(), consumoId: id, importeAnterior: anterior, importeNuevo: costoImporte, cambiadoEn: ahora, usuarioId: usuario.id };
+            const siguiente = {
+              ...inventario,
+              consumos: inventario.consumos.map((c) => (c.id === id ? actualizado : c)),
+              consumoCostoCambios: [...inventario.consumoCostoCambios, cambio],
+            };
+            ganchos.antesDeConfirmar?.();
+            guardarInventario(siguiente);
+            return { consumo: crearVistas(siguiente, 'consumo')(actualizado), cambiado: true };
+          } catch (e) {
+            if (e instanceof ErrorDatos) throw e;
+            throw new ErrorDatos(CODIGOS.DESCONOCIDO); // un fallo inesperado no deja nada guardado
+          }
+        });
+      },
+    },
+    gastos: {
+      async registrarGasto(entrada) {
+        await esperar(retardoMs);
+        return enSerie(() => {
+          try {
+            const usuario = exigirSesion();
+            const ahoraFecha = new Date();
+            const ahora = ahoraFecha.toISOString();
+            const n = validarGasto(entrada, { hoy: hoyEnCostaRica(ahoraFecha) });
+            const gastos = leerGastos();
+
+            // Idempotencia: reenviar el mismo gasto devuelve el original; la misma clave con otro gasto se rechaza.
+            const previo = gastos.find((g) => g.claveIdempotencia === n.claveIdempotencia);
+            if (previo) {
+              if (!gastoCoincide(n, previo)) throw errorClaveReutilizada();
+              return { gasto: crearVistaDeGasto()(previo), repetido: true };
+            }
+
+            const campos = {};
+            if (n.productoId && !leerProductos().some((p) => p.id === n.productoId)) campos.productoId = 'El producto elegido no existe.';
+            if (n.compraId && !leerInventario().compras.some((c) => c.id === n.compraId)) campos.compraId = 'La compra elegida no existe.';
+            lanzarSiHayCampos(campos);
+
+            const gasto = {
+              id: generarId(), fechaGasto: n.fechaGasto, concepto: n.concepto, importe: n.importe,
+              productoId: n.productoId, compraId: n.compraId, nota: n.nota, usuarioId: usuario.id, registradoEn: ahora,
+              claveIdempotencia: n.claveIdempotencia,
+            };
+            guardarGastos([...gastos, gasto]);
+            return { gasto: crearVistaDeGasto()(gasto), repetido: false };
+          } catch (e) {
+            if (e instanceof ErrorDatos) throw e;
+            throw new ErrorDatos(CODIGOS.DESCONOCIDO);
+          }
+        });
+      },
+      async listarGastos(consulta) {
+        await esperar(retardoMs);
+        exigirSesion();
+        const { desde, hasta, productoId, compraId, pagina, tamanoPagina } = normalizarConsultaGastos(consulta);
+        if (productoId) exigirProducto(leerProductos(), productoId);
+        if (compraId && !leerInventario().compras.some((c) => c.id === compraId)) throw new ErrorDatos(CODIGOS.NO_ENCONTRADO);
+        const vista = crearVistaDeGasto();
+        const filtrados = leerGastos()
+          .map((gasto, posicion) => ({ gasto, posicion }))
+          .filter(({ gasto }) => (!desde || gasto.fechaGasto >= desde) && (!hasta || gasto.fechaGasto <= hasta))
+          .filter(({ gasto }) => !productoId || gasto.productoId === productoId)
+          .filter(({ gasto }) => !compraId || gasto.compraId === compraId)
+          .sort((a, b) => b.gasto.fechaGasto.localeCompare(a.gasto.fechaGasto) || b.gasto.registradoEn.localeCompare(a.gasto.registradoEn) || b.posicion - a.posicion)
+          .map(({ gasto }) => vista(gasto));
+        return paginar(filtrados, pagina, tamanoPagina);
+      },
+      async obtenerGasto(id) {
+        await esperar(retardoMs);
+        exigirSesion();
+        const gasto = leerGastos().find((g) => g.id === id);
+        if (!gasto) throw new ErrorDatos(CODIGOS.NO_ENCONTRADO);
+        return crearVistaDeGasto()(gasto);
+      },
+    },
+    costos: {
+      // SOLO LECTURA y solo información REAL: lo que costó cada línea de compra. NO hay ninguna operación de costo promedio (BLOQUEADO).
+      async listarCostosPorProducto(consulta) {
+        await esperar(retardoMs);
+        exigirSesion();
+        const { busqueda, estado, pagina, tamanoPagina } = normalizarConsulta(consulta);
+        const unidades = new Map(leerUnidades().map((u) => [u.id, u]));
+        const { compraLineas } = leerInventario();
+        const pag = paginar(filtrarYOrdenar(leerProductos(), { busqueda, estado, soloCompletos: false }), pagina, tamanoPagina);
+        const items = pag.items.map((p) => {
+          const u = unidades.get(p.unidadBaseId);
+          return {
+            productoId: p.id, nombre: p.nombre, activo: p.activo,
+            unidadBase: u ? { id: u.id, nombre: u.nombre, abreviatura: u.abreviatura } : null,
+            lineasDeCompra: compraLineas.filter((l) => l.productoId === p.id).length,
+          };
+        });
+        return { ...pag, items };
+      },
+      async historialCostosAdquisicion(productoId, consulta) {
+        await esperar(retardoMs);
+        exigirSesion();
+        const producto = exigirProducto(leerProductos(), productoId);
+        const { desde, hasta, pagina, tamanoPagina } = normalizarConsultaCompras(consulta);
+        const unidades = new Map(leerUnidades().map((u) => [u.id, u]));
+        const presentaciones = new Map(leerPresentaciones().map((p) => [p.id, p]));
+        const resumenUnidad = (uid) => { const u = unidades.get(uid); return u ? { id: u.id, nombre: u.nombre, abreviatura: u.abreviatura } : null; };
+        const { compras, compraLineas } = leerInventario();
+        const porId = new Map(compras.map((c) => [c.id, c]));
+        const filtradas = compraLineas
+          .map((linea, posicion) => ({ linea, posicion, compra: porId.get(linea.compraId) }))
+          .filter(({ linea, compra }) => linea.productoId === productoId && compra)
+          .filter(({ compra }) => (!desde || compra.fechaCompra >= desde) && (!hasta || compra.fechaCompra <= hasta))
+          .sort((a, b) => b.compra.fechaCompra.localeCompare(a.compra.fechaCompra) || b.compra.registradaEn.localeCompare(a.compra.registradaEn) || b.posicion - a.posicion)
+          .map(({ linea, compra }) => ({
+            // Tal como se registró: sin promediar y sin convertir a costo por unidad base (fórmula sin aprobar).
+            lineaId: linea.id, compraId: compra.id, fechaCompra: compra.fechaCompra, cantidad: linea.cantidad,
+            unidad: resumenUnidad(linea.unidadId),
+            presentacion: linea.presentacionId ? { id: linea.presentacionId, nombre: presentaciones.get(linea.presentacionId)?.nombre ?? '' } : null,
+            costoUnitario: linea.costoUnitario, costoTotal: linea.costoTotal,
+          }));
+        const u = unidades.get(producto.unidadBaseId);
+        return {
+          ...paginar(filtradas, pagina, tamanoPagina),
+          producto: {
+            id: producto.id, nombre: producto.nombre, activo: producto.activo,
+            unidadBase: u ? { id: u.id, nombre: u.nombre, abreviatura: u.abreviatura } : null,
+          },
+        };
       },
     },
   };

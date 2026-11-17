@@ -4,7 +4,7 @@ import { useDatos } from '../../nucleo/datos/useDatos.js';
 import { ErrorDatos, mensajeParaUsuario } from '../../nucleo/datos/errores.js';
 import { generarClaveIdempotencia } from '../../nucleo/datos/inventario.js';
 import { validarOperacion, MOTIVO_MAX, NOTA_OPERACION_MAX } from '../../nucleo/datos/salidas.js';
-import { formatearCantidad } from '../../compartido/utilidades/formato.js';
+import { formatearCantidad, formatearDinero } from '../../compartido/utilidades/formato.js';
 import { leerDecimal } from '../../compartido/utilidades/decimales.js';
 import { useNotificaciones } from '../../compartido/componentes/Notificaciones.jsx';
 import DialogoConfirmacion from '../../compartido/componentes/DialogoConfirmacion.jsx';
@@ -12,12 +12,12 @@ import SelectorDeProducto from '../../compartido/componentes/SelectorDeProducto.
 import { TEXTOS } from './textos.js';
 
 /** Convierte lo escrito en el formulario al formato de `registrarSalida` / `registrarConsumo`. */
-export function armarEntrada({ producto, medida, cantidad, motivo, nota }, claveIdempotencia, clase) {
+export function armarEntrada({ producto, medida, cantidad, motivo, costo, nota }, claveIdempotencia, clase) {
   return {
     productoId: producto?.id,
     ...(medida.startsWith('p:') ? { presentacionId: medida.slice(2) } : { unidadId: medida.slice(2) || undefined }),
     cantidad,
-    ...(clase === 'salida' ? { motivo } : {}), // un consumo NO tiene motivo
+    ...(clase === 'salida' ? { motivo } : { costoImporte: costo }), // un consumo NO tiene motivo; solo el consumo puede llevar costo (opcional, manual)
     nota,
     claveIdempotencia,
   };
@@ -37,6 +37,7 @@ export default function FormularioDeOperacion({ clase }) {
   const [medida, setMedida] = useState('');
   const [cantidad, setCantidad] = useState('');
   const [motivo, setMotivo] = useState('');
+  const [costo, setCosto] = useState(''); // solo consumos: costo opcional (importe propio, origen manual)
   const [nota, setNota] = useState('');
   const [unidades, setUnidades] = useState([]);
   const [presentaciones, setPresentaciones] = useState([]);
@@ -89,7 +90,7 @@ export default function FormularioDeOperacion({ clase }) {
 
   const presentacion = medida.startsWith('p:') ? presentaciones.find((p) => p.id === medida.slice(2)) : null;
   const unidad = !presentacion && medida.startsWith('u:') ? unidades.find((u) => u.id === medida.slice(2)) : null;
-  const entrada = () => armarEntrada({ producto, medida, cantidad, motivo, nota }, clave.current, clase);
+  const entrada = () => armarEntrada({ producto, medida, cantidad, motivo, costo, nota }, clave.current, clase);
 
   // Primero se revisa lo evidente con las mismas reglas de la capa de datos (sin guardar nada); luego se pide confirmación.
   function revisar(e) {
@@ -128,6 +129,8 @@ export default function FormularioDeOperacion({ clase }) {
   const medidaTexto = presentacion ? presentacion.nombre : (unidad?.abreviatura ?? '');
   const cantidadLeida = leerDecimal(cantidad); // null mientras lo escrito no sea un número: el diálogo solo se abre con datos válidos
   const cantidadTexto = cantidadLeida ? formatearCantidad(cantidadLeida.toFixed(), medidaTexto) : cantidad;
+  const costoLeido = esSalida ? null : leerDecimal(costo);
+  const costoTexto = costoLeido ? formatearDinero(costoLeido.toFixed(2)) : '';
   const hayDisponible = disponible.estado === 'listo' && disponible.existencia;
   const unidadBase = hayDisponible ? disponible.existencia.unidadBase?.abreviatura ?? '' : '';
 
@@ -211,6 +214,21 @@ export default function FormularioDeOperacion({ clase }) {
           </div>
         )}
 
+        {!esSalida && (
+          <div className="campo">
+            <label htmlFor="consumo-costo">Costo del consumo (₡, opcional)</label>
+            <input
+              id="consumo-costo" type="text" inputMode="decimal" autoComplete="off" value={costo} disabled={enviando}
+              onChange={(e) => { setErrores({}); setCosto(e.target.value); }}
+              aria-invalid={errores.costoImporte ? 'true' : undefined} aria-describedby={errores.costoImporte ? 'consumo-costo-error' : 'consumo-costo-ayuda'}
+            />
+            <p id="consumo-costo-ayuda" className="texto-suave campo__ayuda">
+              Importe total que costó este consumo. Si no lo sabés, dejalo vacío: quedará como «Sin costo registrado». No se calcula de ningún promedio.
+            </p>
+            {errores.costoImporte && <p id="consumo-costo-error" className="campo__error" role="alert">{errores.costoImporte}</p>}
+          </div>
+        )}
+
         <div className="campo">
           <label htmlFor={`${clase}-nota`}>Nota (opcional)</label>
           <textarea
@@ -229,7 +247,7 @@ export default function FormularioDeOperacion({ clase }) {
 
       <DialogoConfirmacion
         abierto={confirmando} titulo={t.dialogoTitulo} textoConfirmar={t.registrar} ocupado={enviando}
-        mensaje={`Se descontarán ${cantidadTexto} de «${producto?.nombre ?? ''}» del inventario${esSalida ? ` por el motivo «${motivo.trim()}»` : ''}. ${t.ayudaDialogo}`}
+        mensaje={`Se descontarán ${cantidadTexto} de «${producto?.nombre ?? ''}» del inventario${esSalida ? ` por el motivo «${motivo.trim()}»` : ''}${costoTexto ? ` con un costo de ${costoTexto}` : ''}. ${t.ayudaDialogo}`}
         onConfirmar={registrar} onCancelar={() => setConfirmando(false)}
       />
     </section>
