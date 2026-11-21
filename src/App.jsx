@@ -13,6 +13,7 @@ import ModuloConsumos from './modulos/salidas/ModuloConsumos.jsx';
 import ModuloGastos from './modulos/gastos/ModuloGastos.jsx';
 import ModuloCostos from './modulos/costos/ModuloCostos.jsx';
 import ModuloMovimientos from './modulos/movimientos/ModuloMovimientos.jsx';
+import ModuloReportes from './modulos/reportes/ModuloReportes.jsx';
 
 // Aquí se registran las rutas de cada módulo al construirlo (Versión 7 en adelante).
 export default function App() {
@@ -31,6 +32,7 @@ export default function App() {
           <Route path="gastos/*" element={<ModuloGastos />} />
           <Route path="costos/*" element={<ModuloCostos />} />
           <Route path="movimientos/*" element={<ModuloMovimientos />} />
+          <Route path="reportes/*" element={<ModuloReportes />} />
         </Route>
       </Route>
       <Route path="/inicio" element={<Navigate to="/" replace />} />

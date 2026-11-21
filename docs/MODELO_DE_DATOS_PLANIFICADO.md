@@ -59,6 +59,14 @@ Todas las tablas incluyen `creado_en` y, cuando aplica, `creado_por` y `actualiz
 - **consumo_costo_cambios (nueva):** id, consumo_id, importe_anterior (nulo), importe_nuevo (nulo), cambiado_en, usuario_id. Solo `INSERT`: el valor anterior no se pierde. *(Se agregó respecto al modelo original, para mantener la trazabilidad.)*
 - **No existe tabla ni campo de costo promedio:** la fórmula está pendiente de aprobación del hogar (RF-027, RF-028, RF-029). Los costos de adquisición se leen directamente de las líneas de compra.
 
+## Versión 9 — reportes mensuales de inventario y compras (sin tablas nuevas)
+**Construida en la V9** (ver `ESTADO_V9.md`). **No crea tablas ni campos:** solo consulta `movimientos`, `compras`, `compra_lineas`, `productos`, `unidades` y `presentaciones`. Recomendaciones para una base real:
+- **Estado al cierre y resumen del mes:** una consulta agrupada por producto sobre `movimientos`. La existencia al cierre es `sum(sentido * cantidad_base)` de los movimientos con día en `America/Costa_Rica` menor o igual al último día del mes; el saldo inicial es la misma suma con día menor al primero. Se pueden calcular juntos con `sum(...) filter (where ...)`. Los ajustes se suman con signo y **no** entran en ingresos ni salidas.
+- **Día en hora de Costa Rica:** `(fecha_hora AT TIME ZONE 'America/Costa_Rica')::date`; el índice sobre esa expresión (y sobre `producto_id`) acelera los reportes. Son los mismos índices recomendados para la V7.
+- **Compras del mes:** filtrar `compras` por `fecha_compra` (la fecha de la compra, **no** `registrada_en`) y unir con `compra_lineas` y con el movimiento de cada línea (`movimiento_id`) para la cantidad en la unidad base. Índices recomendados: `compras (fecha_compra)` y `compra_lineas (compra_id, producto_id)`.
+- Los importes se suman con `numeric` exacto (nunca coma flotante); `total_general` es la suma de los subtotales y vale `0.00` si no hay compras.
+- Todo es de **solo lectura**: el rol que ejecuta estas consultas no necesita permisos de escritura.
+
 ## Versión 11 — conteos
 - **conteos:** id, iniciado_en, finalizado_en, estado (`en_curso`|`finalizado`), usuario_id, nota.
 - **conteo_lineas:** id, conteo_id, producto_id, cantidad_fisica, unidad_id, cantidad_fisica_base, existencia_digital_base (copia al contar), diferencia.

@@ -214,3 +214,39 @@ a:focus-visible, select:focus-visible, button:focus-visible, .tarjeta--enlace:fo
 .tabla td .etiqueta { margin-left: .4rem; }
 .ficha + .aviso-lista { margin-top: 0; }
 
+
+/* Reportes mensuales (V9) */
+.selector-periodo { border: 1px solid var(--borde); border-radius: 10px; padding: .25rem .75rem .75rem; margin: 0; display: flex; gap: .75rem; flex-wrap: wrap; align-items: flex-end; }
+.selector-periodo legend { font-weight: 600; padding: 0 .35rem; }
+.selector-periodo select { min-height: 44px; padding: .5rem .75rem; border: 1px solid var(--borde); border-radius: 8px; font: inherit; background: var(--superficie); color: var(--texto); }
+.selector-periodo__atajos { display: flex; gap: .5rem; flex-wrap: wrap; }
+.selector-periodo__error { flex-basis: 100%; margin: 0; }
+.encabezado-impresion { display: none; }
+
+/* Vista imprimible: solo el reporte, con su título, período y fecha de generación; sin menús ni botones, y las filas no se cortan. */
+@media print {
+  :root { --fondo: #fff; --superficie: #fff; --texto: #000; --texto-suave: #333; --borde: #999; --primario: #000; --menu-activo: #fff; color-scheme: light; }
+  @page { margin: 1.5cm; }
+  body { background: #fff; color: #000; font-size: 11pt; }
+  .banner-demo, .encabezado, .menu, .subnavegacion, .herramientas, .pestanas, .paginacion, .notificaciones, .no-imprimir, .selector-periodo { display: none !important; }
+  .aplicacion, .cuerpo { display: block; min-height: 0; }
+  .contenido { padding: 0; }
+  .encabezado-impresion { display: block; margin: 0 0 1rem; padding-bottom: .5rem; border-bottom: 2px solid #000; }
+  .encabezado-impresion h2 { margin: .15rem 0; font-size: 15pt; }
+  .encabezado-impresion p { margin: 0; }
+  .encabezado-impresion__institucion { font-weight: 700; }
+  .tabla-contenedor { overflow: visible; border: 0; }
+  .tabla { width: 100%; border-collapse: collapse; }
+  .tabla th, .tabla td { border: 1px solid #999; padding: .25rem .4rem; }
+  .tabla tr, .tabla td, .tabla th { break-inside: avoid; page-break-inside: avoid; }
+  .tabla thead { display: table-header-group; }
+  .tabla tfoot { display: table-footer-group; }
+  a { color: inherit; text-decoration: none; }
+  .etiqueta { border: 0; padding: 0; }
+}
+.tabla .fila-grupo th { background: var(--menu-activo); text-align: left; }
+.tabla .fila-subtotal th, .tabla .fila-subtotal td { font-weight: 600; border-top: 1px solid var(--borde); }
+.tabla tfoot th, .tabla tfoot td { font-weight: 700; border-top: 2px solid var(--borde); }
+@media print {
+  .tabla .fila-grupo th { background: #eee; }
+}

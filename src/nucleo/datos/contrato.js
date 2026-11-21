@@ -145,6 +145,20 @@
  *         // Solo productos con movimientos en el período, ordenados por nombre. Errores: VALIDACION (desde, hasta), NO_ENCONTRADO
  *   }                                 // No existe editar ni eliminar movimientos.
  *
+ *   reportes: {                    // Versión 9. SOLO LECTURA. Todas exigen sesión (SIN_SESION). Reflejan solo operaciones confirmadas.
+ *     inventarioAlCierre({ mes })  -> Promise<{ mes, desde, hasta, cierre, filas: [{ producto: {id, nombre, activo}, unidadBase, existencia, cantidadMovimientos }], totalProductos }>
+ *         // mes = 'AAAA-MM' (VALIDACION campos.mes si falta o no es válido). Existencia de cada producto al ÚLTIMO DÍA del mes, calculada desde los movimientos
+ *         // (hora de Costa Rica). En la unidad base. Incluye los productos con algún movimiento hasta esa fecha (la existencia puede ser 0). Orden por nombre.
+ *     resumenMovimientos({ mes })  -> Promise<{ mes, desde, hasta, filas: [{ producto, unidadBase, saldoInicial, ingresos, salidas, salidasGenerales, consumos, ajustes,
+ *                                                saldoFinal, cantidadIngresos, cantidadSalidas, cantidadAjustes }], totalMovimientos }>
+ *         // saldoInicial + ingresos - salidas + ajustes = saldoFinal (siempre). saldoInicial = existencia al cierre del mes anterior. Incluye un producto si tuvo
+ *         // movimientos en el mes o empezó con saldo distinto de cero. Los ajustes NO cuentan como ingresos ni como salidas.
+ *     comprasMensuales({ mes })    -> Promise<{ mes, desde, hasta, grupos: [{ producto, unidadBase, lineas: [{ lineaId, compraId, fechaCompra, cantidad, unidad, presentacion,
+ *                                                costoUnitario, costoTotal, cantidadBase }], subtotalCosto, subtotalCantidadBase, cantidadLineas }],
+ *                                                totalGeneral, cantidadCompras, cantidadLineas }>
+ *         // El mes se cuenta por la fecha de la COMPRA (fechaCompra). Costos tal como se registraron (sin promediar). totalGeneral = suma de los subtotales.
+ *   }                                // No existe exportar ni modificar: los reportes solo se consultan.
+ *
  * Usuario:  { id: string, correo: string, nombre: string }
  * MovimientoVista: { id, fechaHora (ISO), tipo, subtipo, sentido, producto: {id, nombre}, cantidadOriginal (texto), unidad: {id, nombre, abreviatura} | null,
  *                    presentacion: {id, nombre} | null, cantidadBase, unidadBase, referencia: { tipo: 'compra'|'salida'|'consumo', id } | null,
@@ -194,6 +208,7 @@ const SECCIONES_REQUERIDAS = {
   presentaciones: ['crearPresentacion', 'editarPresentacion', 'obtenerPresentacion', 'listarPresentaciones', 'cambiarEstadoPresentacion'],
   inventario: ['registrarMovimiento', 'listarExistencias', 'obtenerExistencia', 'verificarConsistencia', 'alCambiarInventario'],
   movimientos: ['listarMovimientos', 'obtenerMovimiento', 'consolidarMovimientos'],
+  reportes: ['inventarioAlCierre', 'resumenMovimientos', 'comprasMensuales'],
 };
 
 export function validarAdaptador(adaptador) {

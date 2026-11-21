@@ -25,6 +25,7 @@ import { hoyEnCostaRica } from '../../compartido/utilidades/formato.js';
 import {
   normalizarConsultaMovimientos, filtrarMovimientos, consolidarMovimientos as consolidar, existenciaAlMovimiento,
 } from './movimientos.js';
+import { validarMes, inventarioAlCierre as calcularCierre, resumenDelMes, comprasDelMes } from './reportes.js';
 import {
   validarUnidad, detectarUnidadDuplicada, errorUnidadDuplicada, filtrarUnidades,
   UNIDADES_SUGERIDAS, ESTADOS_UNIDAD, CONVERSIONES_GENERALES_SUGERIDAS,
@@ -410,6 +411,19 @@ export function crearAdaptadorDemo({ almacen = crearAlmacen(), retardoMs = 150, 
       .sort((a, b) => b.v.fechaRegistro.localeCompare(a.v.fechaRegistro) || b.posicion - a.posicion) // la más reciente primero
       .map(({ v }) => v);
     return paginar(filtradas, pagina, tamanoPagina);
+  }
+
+  // REPORTES MENSUALES (V9): solo lectura. Resuelven los nombres de productos y unidades de las filas de cada reporte.
+  function crearAyudasDeReporte() {
+    const productos = new Map(leerProductos().map((p) => [p.id, p]));
+    const unidades = new Map(leerUnidades().map((u) => [u.id, u]));
+    const presentaciones = new Map(leerPresentaciones().map((p) => [p.id, p]));
+    return {
+      unidad: (id) => { const u = unidades.get(id); return u ? { id: u.id, nombre: u.nombre, abreviatura: u.abreviatura } : null; },
+      producto: (id) => { const p = productos.get(id); return { id, nombre: p?.nombre ?? '', activo: p ? p.activo : false }; },
+      presentacion: (id) => (id ? { id, nombre: presentaciones.get(id)?.nombre ?? '' } : null),
+      porNombre: (a, b) => a.producto.nombre.localeCompare(b.producto.nombre, 'es'),
+    };
   }
 
   // HISTORIAL DE MOVIMIENTOS (V7): solo lectura. Une cada movimiento con su producto, sus unidades y su origen.
@@ -876,6 +890,58 @@ export function crearAdaptadorDemo({ almacen = crearAlmacen(), retardoMs = 150, 
           .sort((a, b) => a.producto.nombre.localeCompare(b.producto.nombre, 'es'));
         const totalMovimientos = filas.reduce((t, f) => t + f.cantidadEntradas + f.cantidadSalidas + f.cantidadAjustes, 0);
         return { desde, hasta, filas, totalMovimientos };
+      },
+    },
+    reportes: {
+      // SOLO LECTURA (V9): no modifica nada. Los reportes reflejan únicamente operaciones confirmadas (movimientos y compras guardados).
+      async inventarioAlCierre(consulta) {
+        await esperar(retardoMs);
+        exigirSesion();
+        const { mes, desde, hasta } = validarMes(consulta?.mes);
+        const { movimientos } = leerInventario();
+        const ayudas = crearAyudasDeReporte();
+        const filas = calcularCierre(movimientos, { hasta })
+          .map((f) => ({
+            producto: ayudas.producto(f.productoId), unidadBase: ayudas.unidad(f.unidadBaseId),
+            existencia: f.existencia, cantidadMovimientos: f.cantidadMovimientos,
+          }))
+          .sort(ayudas.porNombre);
+        return { mes, desde, hasta, cierre: hasta, filas, totalProductos: filas.length };
+      },
+      async resumenMovimientos(consulta) {
+        await esperar(retardoMs);
+        exigirSesion();
+        const { mes, desde, hasta } = validarMes(consulta?.mes);
+        const { movimientos } = leerInventario();
+        const ayudas = crearAyudasDeReporte();
+        const filas = resumenDelMes(movimientos, { desde, hasta })
+          .map(({ productoId, unidadBaseId, ...cifras }) => ({ producto: ayudas.producto(productoId), unidadBase: ayudas.unidad(unidadBaseId), ...cifras }))
+          .sort(ayudas.porNombre);
+        const totalMovimientos = filas.reduce((t, f) => t + f.cantidadIngresos + f.cantidadSalidas + f.cantidadAjustes, 0);
+        return { mes, desde, hasta, filas, totalMovimientos };
+      },
+      async comprasMensuales(consulta) {
+        await esperar(retardoMs);
+        exigirSesion();
+        const { mes, desde, hasta } = validarMes(consulta?.mes);
+        const { compras, compraLineas, movimientos } = leerInventario();
+        const ayudas = crearAyudasDeReporte();
+        const resultado = comprasDelMes(compras, compraLineas, movimientos, { desde, hasta });
+        const grupos = resultado.grupos
+          .map((g) => ({
+            producto: ayudas.producto(g.productoId), unidadBase: ayudas.unidad(g.unidadBaseId),
+            lineas: g.lineas.map((l) => ({
+              lineaId: l.lineaId, compraId: l.compraId, fechaCompra: l.fechaCompra, cantidad: l.cantidad,
+              unidad: ayudas.unidad(l.unidadId), presentacion: ayudas.presentacion(l.presentacionId),
+              costoUnitario: l.costoUnitario, costoTotal: l.costoTotal, cantidadBase: l.cantidadBase,
+            })),
+            subtotalCosto: g.subtotalCosto, subtotalCantidadBase: g.subtotalCantidadBase, cantidadLineas: g.cantidadLineas,
+          }))
+          .sort(ayudas.porNombre);
+        return {
+          mes, desde, hasta, grupos, totalGeneral: resultado.totalGeneral,
+          cantidadCompras: resultado.cantidadCompras, cantidadLineas: resultado.cantidadLineas,
+        };
       },
     },
     compras: {

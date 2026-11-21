@@ -248,8 +248,25 @@ Todas las operaciones exigen sesión (`SIN_SESION`). **El costo promedio está B
 - Reglas puras en `src/nucleo/datos/gastos.js` y `salidas.js`; módulo aislado en `src/nucleo/costos`. En el demo, los gastos viven en `inventario.demo.gastos` y el costo de los consumos con su historial dentro de `inventario.demo.inventario`.
 - **Para la base real:** la tabla `gastos` con `clave_idempotencia` única y sin `UPDATE`/`DELETE`; las columnas de costo en `consumos` y la tabla de cambios (solo `INSERT`); `editarCostoConsumo` en una sola transacción (actualizar el consumo e insertar el cambio); las consultas de costos de adquisición leen las líneas de compra sin agrupar.
 
+### 2.11 Versión 9: `reportes` (inventario y compras)
+**Solo lectura.** Todas las operaciones exigen sesión (`SIN_SESION`) y reciben `{mes: 'AAAA-MM'}`. Reflejan únicamente operaciones confirmadas (movimientos y compras guardados). No existe exportar ni modificar desde esta sección.
+
+| Operación | Resultado | Errores |
+|---|---|---|
+| `inventarioAlCierre({mes})` | `{mes, desde, hasta, cierre, filas, totalProductos}` | `VALIDACION` (`campos.mes`) |
+| `resumenMovimientos({mes})` | `{mes, desde, hasta, filas, totalMovimientos}` | `VALIDACION` (`campos.mes`) |
+| `comprasMensuales({mes})` | `{mes, desde, hasta, grupos, totalGeneral, cantidadCompras, cantidadLineas}` | `VALIDACION` (`campos.mes`) |
+
+- **Mes:** `'AAAA-MM'` con año entre 2000 y 2100; si falta o no es válido, `VALIDACION` con el mensaje en `campos.mes`. `desde` y `hasta` son el primer y el último día del mes (`'AAAA-MM-DD'`). Los días se cuentan en hora de Costa Rica.
+- **`inventarioAlCierre`:** `filas` = `[{producto: {id, nombre, activo}, unidadBase, existencia, cantidadMovimientos}]`, ordenadas por nombre. `existencia` es la suma de `sentido × cantidadBase` de todos los movimientos del producto **hasta el último día del mes**, en su unidad base y como texto decimal. Incluye los productos con algún movimiento hasta esa fecha (la existencia puede ser 0, y un producto inactivo también aparece). `cierre` es el último día del mes.
+- **`resumenMovimientos`:** `filas` = `[{producto, unidadBase, saldoInicial, ingresos, salidas, salidasGenerales, consumos, ajustes, saldoFinal, cantidadIngresos, cantidadSalidas, cantidadAjustes}]`, ordenadas por nombre. **`saldoInicial + ingresos − salidas + ajustes = saldoFinal`** siempre. `saldoInicial` es la existencia al cierre del mes anterior; `salidas = salidasGenerales + consumos`; `ajustes` es la suma con signo y **no cuenta como ingresos ni como salidas**. Incluye un producto si tuvo movimientos en el mes o si empezó con saldo distinto de cero. `totalMovimientos` = suma de las tres cantidades de movimientos de todas las filas.
+- **`comprasMensuales`:** el mes se cuenta por la **fecha de la compra** (`fechaCompra`), no por el día en que se registró. `grupos` = `[{producto, unidadBase, lineas, subtotalCosto, subtotalCantidadBase, cantidadLineas}]`, ordenados por nombre; cada línea es `{lineaId, compraId, fechaCompra, cantidad, unidad, presentacion, costoUnitario, costoTotal, cantidadBase}` (de la más antigua a la más reciente). `cantidad` es lo registrado (unidad o presentación) y `cantidadBase` su equivalente en la unidad base. **Los costos son los registrados en cada línea: sin promediar.** `subtotalCosto` y `totalGeneral` son importes con 2 decimales (`totalGeneral` = suma de los subtotales; `'0.00'` si no hay compras). `cantidadCompras` cuenta compras distintas.
+- **Verificable:** cada total coincide con la suma de lo que lo compone (`listarMovimientos` con el mismo producto y período para el inventario; las líneas y `listarCompras` para las compras).
+- Reglas puras reutilizables: `src/nucleo/datos/reportes.js`. Pruebas de contrato reutilizables: `src/nucleo/datos/pruebasContratoReportes.js`.
+- Pendientes de la V10 en esta misma sección: `gastosMensuales`, `consumoMensual` y `costosMensuales`.
+
 ## 3. Secciones previstas (se agregan al construir cada módulo)
-_(Las versiones 2 a 8 ya están en las secciones 2.2 a 2.10; ver `ESTADO_V2.md` a `ESTADO_V8.md`.)_
+_(Las versiones 2 a 9 ya están en las secciones 2.2 a 2.11; ver `ESTADO_V2.md` a `ESTADO_V9.md`.)_
 
 | Versión | Sección | Operaciones |
 |---|---|---|
@@ -259,7 +276,7 @@ _(Las versiones 2 a 8 ya están en las secciones 2.2 a 2.10; ver `ESTADO_V2.md` 
 | 6 | `salidas`, `consumos` (hechas) | `registrarSalida`, `registrarConsumo`, `listarSalidas`, `listarConsumos`, `obtenerSalida`, `obtenerConsumo` (ver 2.8) |
 | 7 | `movimientos` (hecha) | `listarMovimientos`, `obtenerMovimiento`, `consolidarMovimientos` (ver 2.9) |
 | 8 | `gastos`, `costos` (hechas) | `registrarGasto`, `listarGastos`, `obtenerGasto`, `listarCostosPorProducto`, `historialCostosAdquisicion(productoId)`, `editarCostoConsumo` (ver 2.10). Costo promedio BLOQUEADO |
-| 9–10 | `reportes` | `inventarioAlCierre(mes)`, `resumenMovimientos(mes)`, `comprasMensuales(mes)`, `gastosMensuales(mes)`, `consumoMensual(mes)`, `costosMensuales(mes)` |
+| 9–10 | `reportes` (V9 hecha) | `inventarioAlCierre`, `resumenMovimientos`, `comprasMensuales` (ver 2.11); pendientes de la V10: `gastosMensuales`, `consumoMensual`, `costosMensuales` |
 | 11 | `conteos` | `crear`, `registrarCantidadFisica`, `finalizar`, `comparacion(conteoId)` |
 | 12 | `ajustes` | `confirmarAjuste({conteoLineaId, motivo, claveIdempotencia})`, `anularMovimiento({movimientoId, motivo})` |
 | 13 | `desinfecciones` | `registrar`, `marcarDesinfectada({id, cantidad})`, `listar` |
