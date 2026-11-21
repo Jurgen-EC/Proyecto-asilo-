@@ -10,7 +10,7 @@ export const MODULOS = [
   { id: 'salidas',      nombre: 'Salidas y consumo',       ruta: '/salidas',      version: 6,  estado: 'disponible', rutasExtra: ['/consumos'], descripcion: 'Salidas y consumos de productos' },
   { id: 'movimientos',  nombre: 'Movimientos',             ruta: '/movimientos',  version: 7,  estado: 'disponible', descripcion: 'Historial, ingresos, salidas y consolidado' },
   { id: 'costos',       nombre: 'Gastos y costos',         ruta: '/costos',       version: 8,  estado: 'disponible', rutasExtra: ['/gastos'], descripcion: 'Gastos y costos de adquisición' },
-  { id: 'reportes',     nombre: 'Reportes mensuales',      ruta: '/reportes',     version: 9,  estado: 'proximamente', descripcion: 'Inventario, compras, gastos, consumo y costos' },
+  { id: 'reportes',     nombre: 'Reportes mensuales',      ruta: '/reportes',     version: 9,  estado: 'disponible', descripcion: 'Inventario, compras, gastos, consumo y costos' },
   { id: 'conteos',      nombre: 'Conteos y ajustes',       ruta: '/conteos',      version: 11, estado: 'proximamente', descripcion: 'Conciliación físico-digital y ajustes' },
   { id: 'desinfeccion', nombre: 'Desinfección',            ruta: '/desinfeccion', version: 13, estado: 'proximamente', descripcion: 'Control de verduras desinfectadas' },
   { id: 'recetas',      nombre: 'Menú y recetas',          ruta: '/recetas',      version: 14, estado: 'proximamente', descripcion: 'Platillos, recetas y cálculo por comensales' },

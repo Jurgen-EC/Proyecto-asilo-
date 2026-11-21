@@ -2,6 +2,7 @@ import { crearAdaptadorDemo, USUARIO_DEMO, CLAVE_DEMO } from '../nucleo/datos/ad
 import { ejecutarPruebasDeContrato } from '../nucleo/datos/pruebasDeContrato.js';
 import { crearDatos } from '../nucleo/datos/index.js';
 import { ejecutarPruebasContratoMovimientos } from '../nucleo/datos/pruebasContratoMovimientos.js';
+import { ejecutarPruebasContratoReportes } from '../nucleo/datos/pruebasContratoReportes.js';
 import { ejecutarPruebasContratoCostos } from '../nucleo/datos/pruebasContratoCostos.js';
 
 ejecutarPruebasDeContrato(
@@ -28,6 +29,12 @@ ejecutarPruebasContratoMovimientos(
 );
 
 ejecutarPruebasContratoCostos(
+  'adaptador demo',
+  () => crearAdaptadorDemo({ retardoMs: 0 }),
+  { correo: USUARIO_DEMO.correo, clave: CLAVE_DEMO },
+);
+
+ejecutarPruebasContratoReportes(
   'adaptador demo',
   () => crearAdaptadorDemo({ retardoMs: 0 }),
   { correo: USUARIO_DEMO.correo, clave: CLAVE_DEMO },
